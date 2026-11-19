@@ -1,0 +1,165 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidProfileKey(val) {
+      return val is string &&
+        val.size() <= 24 &&
+        val in ['conservador', 'moderado', 'crecimiento', 'agresivo'];
+    }
+
+    function isValidIssWeights(weights) {
+      return weights is map &&
+        weights.keys().hasAll(['v', 'c', 'b', 'd', 's']) &&
+        weights.keys().hasOnly(['v', 'c', 'b', 'd', 's']) &&
+        weights.v is number && weights.v >= 0 && weights.v <= 1 &&
+        weights.c is number && weights.c >= 0 && weights.c <= 1 &&
+        weights.b is number && weights.b >= 0 && weights.b <= 1 &&
+        weights.d is number && weights.d >= 0 && weights.d <= 1 &&
+        weights.s is number && weights.s >= 0 && weights.s <= 1;
+    }
+
+    function isValidTastingSnapshot(snap) {
+      return snap is map &&
+        snap.keys().hasAll(['initialCapitalMxn', 'currency', 'firstSavedVersion']) &&
+        snap.keys().hasOnly(['initialCapitalMxn', 'currency', 'firstSavedVersion']) &&
+        snap.initialCapitalMxn is number && snap.initialCapitalMxn >= 0 && snap.initialCapitalMxn <= 1000000000 &&
+        snap.currency is string && snap.currency.size() >= 1 && snap.currency.size() <= 12 &&
+        snap.firstSavedVersion is int && snap.firstSavedVersion >= 1 && snap.firstSavedVersion <= 100;
+    }
+
+    function isValidAnswers(answers) {
+      return answers is list &&
+        answers.size() == 8 &&
+        answers[0] is int && answers[0] >= 1 && answers[0] <= 4 &&
+        answers[1] is int && answers[1] >= 1 && answers[1] <= 4 &&
+        answers[2] is int && answers[2] >= 1 && answers[2] <= 4 &&
+        answers[3] is int && answers[3] >= 1 && answers[3] <= 4 &&
+        answers[4] is int && answers[4] >= 1 && answers[4] <= 4 &&
+        answers[5] is int && answers[5] >= 1 && answers[5] <= 4 &&
+        answers[6] is int && answers[6] >= 1 && answers[6] <= 4 &&
+        answers[7] is int && answers[7] >= 1 && answers[7] <= 4;
+    }
+
+    function isValidNoteItem(notes, idx) {
+      return notes.size() <= idx || (notes[idx] is string && notes[idx].size() <= 300);
+    }
+
+    function isValidSafetyNotes(notes) {
+      return notes is list &&
+        notes.size() <= 6 &&
+        isValidNoteItem(notes, 0) &&
+        isValidNoteItem(notes, 1) &&
+        isValidNoteItem(notes, 2) &&
+        isValidNoteItem(notes, 3) &&
+        isValidNoteItem(notes, 4) &&
+        isValidNoteItem(notes, 5);
+    }
+
+    function isValidInvestorProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'onboardingCompleted',
+          'riskProfileKey',
+          'initialProfileKey',
+          'totalScore',
+          'emotionalToleranceScore',
+          'financialCapacityScore',
+          'knowledgeScore',
+          'answers',
+          'safetyNotes',
+          'issWeights',
+          'tastingSnapshot',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'onboardingCompleted',
+          'riskProfileKey',
+          'initialProfileKey',
+          'totalScore',
+          'emotionalToleranceScore',
+          'financialCapacityScore',
+          'knowledgeScore',
+          'answers',
+          'safetyNotes',
+          'issWeights',
+          'tastingSnapshot',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.uid == userId &&
+        data.uid == request.auth.uid &&
+        data.onboardingCompleted is bool &&
+        isValidProfileKey(data.riskProfileKey) &&
+        isValidProfileKey(data.initialProfileKey) &&
+        data.totalScore is int && data.totalScore >= 8 && data.totalScore <= 32 &&
+        data.emotionalToleranceScore is number && data.emotionalToleranceScore >= 0 && data.emotionalToleranceScore <= 100 &&
+        data.financialCapacityScore is number && data.financialCapacityScore >= 0 && data.financialCapacityScore <= 100 &&
+        data.knowledgeScore is number && data.knowledgeScore >= 0 && data.knowledgeScore <= 100 &&
+        isValidAnswers(data.answers) &&
+        isValidSafetyNotes(data.safetyNotes) &&
+        isValidIssWeights(data.issWeights) &&
+        isValidTastingSnapshot(data.tastingSnapshot) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    match /investorProfiles/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+        isValidId(userId) &&
+        isValidInvestorProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidInvestorProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'onboardingCompleted',
+          'riskProfileKey',
+          'initialProfileKey',
+          'totalScore',
+          'emotionalToleranceScore',
+          'financialCapacityScore',
+          'knowledgeScore',
+          'answers',
+          'safetyNotes',
+          'issWeights',
+          'updatedAt'
+        ]);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
+    }
+  }
+}

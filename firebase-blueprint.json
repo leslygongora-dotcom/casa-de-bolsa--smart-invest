@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "InvestorProfileRecord": {
+      "title": "InvestorProfileRecord",
+      "description": "Perfil de inversionista del usuario calculado en su primer ingreso (tasting de inversión) con sus 8 respuestas, 3 dimensiones y pesos configurables del modelo ISS.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "UID de Firebase Auth del propietario",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "onboardingCompleted": {
+          "type": "boolean",
+          "description": "Indica si el usuario ya completó su test inicial de perfil de inversionista"
+        },
+        "riskProfileKey": {
+          "type": "string",
+          "description": "Perfil definitivo de inversionista tras aplicar reglas de capacidad financiera y seguridad",
+          "enum": ["conservador", "moderado", "crecimiento", "agresivo"],
+          "maxLength": 24
+        },
+        "initialProfileKey": {
+          "type": "string",
+          "description": "Perfil inicial basado únicamente en la suma total (8 a 32 puntos)",
+          "enum": ["conservador", "moderado", "crecimiento", "agresivo"],
+          "maxLength": 24
+        },
+        "totalScore": {
+          "type": "number",
+          "description": "Puntuación total del cuestionario (8 a 32)"
+        },
+        "emotionalToleranceScore": {
+          "type": "number",
+          "description": "Puntuación de tolerancia emocional al riesgo (0 a 100)"
+        },
+        "financialCapacityScore": {
+          "type": "number",
+          "description": "Puntuación de capacidad financiera para asumir pérdidas (0 a 100)"
+        },
+        "knowledgeScore": {
+          "type": "number",
+          "description": "Puntuación de experiencia y conocimiento financiero (0 a 100)"
+        },
+        "answers": {
+          "type": "array",
+          "description": "Lista exacta de 8 respuestas (valores enteros de 1 a 4)"
+        },
+        "safetyNotes": {
+          "type": "array",
+          "description": "Advertencias o ajustes aplicados por las reglas de seguridad y contradicciones"
+        },
+        "issWeights": {
+          "type": "object",
+          "description": "Pesos configurables del modelo Investment Suitability Score (V, C, B, D, S)"
+        },
+        "tastingSnapshot": {
+          "type": "object",
+          "description": "Datos iniciales del tasting de inversión guardados en el primer registro"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Marca temporal del servidor al completar por primera vez el cuestionario",
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Marca temporal del servidor de la última actualización del perfil",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "uid",
+        "onboardingCompleted",
+        "riskProfileKey",
+        "initialProfileKey",
+        "totalScore",
+        "emotionalToleranceScore",
+        "financialCapacityScore",
+        "knowledgeScore",
+        "answers",
+        "safetyNotes",
+        "issWeights",
+        "tastingSnapshot",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/investorProfiles/{userId}": {
+      "schema": {
+        "$ref": "#/entities/InvestorProfileRecord"
+      },
+      "description": "Almacena el perfil de inversionista y tasting inicial de cada usuario autenticado por UID."
+    }
+  }
+}

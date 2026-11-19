@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Investment Platform | Inversión Inteligente con IA</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js para gráficos claros y accesibles -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca', 900: '#312e81' },
+            safeGreen: '#10b981',
+            warningYellow: '#f59e0b',
+            dangerRed: '#ef4444'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Estilos accesibles */
+    :focus-visible {
+      outline: 3px solid #4f46e5 !important;
+      outline-offset: 2px !important;
+    }
+    .tooltip-content {
+      display: none;
+    }
+    .tooltip-wrapper:hover .tooltip-content,
+    .tooltip-wrapper:focus-within .tooltip-content {
+      display: block;
+    }
+  </style>
+</head>
+<body class="h-full bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
+
+  <!-- ENCABEZADO Y BARRA DE NAVEGACIÓN ACCESIBLE -->
+  <header class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-40 shadow-sm" role="banner">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+      <div class="flex items-center space-x-4">
+        <div class="w-12 h-12 rounded-xl bg-brand-600 text-white flex items-center justify-center font-bold text-2xl shadow-md">
+          📈
+        </div>
+        <div>
+          <h1 class="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+            Smart Invest <span class="text-xs bg-brand-100 text-brand-700 dark:bg-brand-900 dark:text-brand-300 font-semibold px-2.5 py-1 rounded-full uppercase tracking-wider">IA Cuantitativa</span>
+          </h1>
+          <p class="text-xs text-slate-500 dark:text-slate-400 font-medium">Inversión transparente para todos los niveles</p>
+        </div>
+      </div>
+
+      <!-- Controles de Accesibilidad & Modo Oscuro -->
+      <div class="flex items-center space-x-3">
+        <!-- Semáforo de Riesgo Visual en Header -->
+        <div id="header-risk-pill" class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-semibold" aria-live="polite">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>Riesgo VaR: 1.6% (Seguro)</span>
+        </div>
+
+        <!-- Botón Modo Oscuro / Claro -->
+        <button id="theme-toggle" class="p-3 rounded-xl bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-600 transition" aria-label="Cambiar entre modo claro y oscuro">
+          <span id="theme-icon">🌙</span>
+        </button>
+
+        <!-- Indicador de Broker / Paper -->
+        <span class="text-xs bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 px-3 py-2 rounded-xl font-bold flex items-center gap-1.5">
+          🛡️ Paper Trading Activo
+        </span>
+      </div>
+    </div>
+
+    <!-- Pestañas de Navegación -->
+    <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-2 sm:space-x-8 overflow-x-auto py-2" role="navigation" aria-label="Secciones de la plataforma">
+      <button onclick="switchTab('dashboard')" id="tab-dashboard" class="nav-tab active-tab text-brand-600 dark:text-brand-400 border-b-2 border-brand-600 font-bold px-3 py-2 text-sm sm:text-base flex items-center gap-2">
+        📊 Mi Portafolio
+      </button>
+      <button onclick="switchTab('market')" id="tab-market" class="nav-tab text-slate-600 dark:text-slate-400 hover:text-slate-900 border-b-2 border-transparent font-medium px-3 py-2 text-sm sm:text-base flex items-center gap-2">
+        🌐 Mi Mercado Hoy
+      </button>
+      <button onclick="switchTab('simulator')" id="tab-simulator" class="nav-tab text-slate-600 dark:text-slate-400 hover:text-slate-900 border-b-2 border-transparent font-medium px-3 py-2 text-sm sm:text-base flex items-center gap-2">
+        🔮 ¿Qué pasa con mi dinero?
+      </button>
+      <button onclick="switchTab('learn')" id="tab-learn" class="nav-tab text-slate-600 dark:text-slate-400 hover:text-slate-900 border-b-2 border-transparent font-medium px-3 py-2 text-sm sm:text-base flex items-center gap-2">
+        🎓 Aprende a Invertir (IA)
+      </button>
+      <button onclick="switchTab('options')" id="tab-options" class="nav-tab text-slate-600 dark:text-slate-400 hover:text-slate-900 border-b-2 border-transparent font-medium px-3 py-2 text-sm sm:text-base flex items-center gap-2">
+        📈 Opciones & Griegas
+      </button>
+      <button onclick="switchTab('backtest')" id="tab-backtest" class="nav-tab text-slate-600 dark:text-slate-400 hover:text-slate-900 border-b-2 border-transparent font-medium px-3 py-2 text-sm sm:text-base flex items-center gap-2">
+        🧪 Backtesting Cuantitativo
+      </button>
+      <button onclick="switchTab('profile')" id="tab-profile" class="nav-tab text-slate-600 dark:text-slate-400 hover:text-slate-900 border-b-2 border-transparent font-medium px-3 py-2 text-sm sm:text-base flex items-center gap-2">
+        👤 Mi Perfil de Riesgo
+      </button>
+    </nav>
+  </header>
+
+  <!-- CONTENIDO PRINCIPAL -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8" role="main">
+
+    <!-- 1. VISTA DASHBOARD -->
+    <section id="view-dashboard" class="space-y-8">
+      
+      <!-- Banner Informativo para Principiantes -->
+      <div class="bg-indigo-600 text-white p-6 rounded-2xl shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-xl sm:text-2xl font-extrabold flex items-center gap-2">
+            ¡Hola, Inversionista! 👋
+          </h2>
+          <p class="text-indigo-100 text-sm mt-1 max-w-2xl">
+            Tu patrimonio está protegido mediante nuestro motor de riesgo cuantitativo 
+            <strong>VaR 99%</strong> con un límite máximo estricto del <strong>2.5%</strong>.
+            Cualquier duda, haz clic en los íconos <span class="bg-white/20 px-1.5 py-0.5 rounded text-xs font-bold">?</span> en pantalla.
+          </p>
+        </div>
+        <button onclick="switchTab('simulator')" class="px-5 py-3 bg-white text-indigo-700 font-bold rounded-xl shadow-md hover:bg-indigo-50 transition text-sm">
+          Simular escenarios de mi dinero ➡️
+        </button>
+      </div>
+
+      <!-- Tarjetas de Capital & Rendimiento (12 Puntos Obligatorios) -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        
+        <!-- 1 & 3. Capital Total & Valor de Portafolio -->
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm relative">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Valor de tu Portafolio</span>
+            <button onclick="openTooltip('accion')" class="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center hover:bg-brand-500 hover:text-white transition" aria-label="Ver explicación de Portafolio">?</button>
+          </div>
+          <div class="mt-3 text-3xl font-black text-slate-900 dark:text-white" id="val-portfolio">$100,590.00 MXN</div>
+          <div class="mt-2 text-xs text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+            ▲ +$590.00 MXN (+0.59%) hoy
+          </div>
+        </div>
+
+        <!-- 2. Capital Disponible -->
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Dinero en Efectivo</span>
+            <button onclick="openTooltip('comprar')" class="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center hover:bg-brand-500 hover:text-white transition">?</button>
+          </div>
+          <div class="mt-3 text-3xl font-black text-slate-900 dark:text-white" id="val-cash">$60,000.00 MXN</div>
+          <div class="mt-2 text-xs text-slate-500 dark:text-slate-400 font-medium">Disponible para nuevas oportunidades</div>
+        </div>
+
+        <!-- 8. Riesgo Actual (VaR 99%) & Semáforo -->
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border-2 border-emerald-500/40 dark:border-emerald-500/30 shadow-sm relative overflow-hidden">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Riesgo Máximo (VaR 99%)</span>
+            <button onclick="openTooltip('var')" class="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center hover:bg-brand-500 hover:text-white transition">?</button>
+          </div>
+          <div class="mt-3 text-3xl font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
+            1.60% <span class="text-xs bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 px-2 py-0.5 rounded font-bold">SEGURO</span>
+          </div>
+          <div class="mt-2 text-xs text-slate-600 dark:text-slate-300 font-medium">
+            Límite mandatorio: <strong>$2,500 MXN (2.5%)</strong>
+          </div>
+        </div>
+
+        <!-- 10 & 11. Conexiones Broker & Bot -->
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Estado de Conexión</span>
+            <button onclick="openTooltip('diversificar')" class="w-6 h-6 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs flex items-center justify-center hover:bg-brand-500 hover:text-white transition">?</button>
+          </div>
+          <div class="mt-3 space-y-2">
+            <div class="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-200">
+              <span>Interactive Brokers:</span>
+              <span class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">🟢 Paper OK</span>
+            </div>
+            <div class="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-200">
+              <span>Gate.io Testnet:</span>
+              <span class="text-emerald-600 dark:text-emerald-400 flex items-center gap-1">🟢 Activo</span>
+            </div>
+            <div class="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-200">
+              <span>IA Random Forest:</span>
+              <span class="text-indigo-600 dark:text-indigo-400 flex items-center gap-1">⚡ Listo</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Gráfico de Rendimiento Fácil de Interpretar -->
+      <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+          <div>
+            <h3 class="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              Evolución de tu Dinero y Protección de Riesgo
+              <button onclick="openTooltip('volatilidad')" class="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-xs flex items-center justify-center">?</button>
+            </h3>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Visualiza tu capital frente a la banda de riesgo protegido (VaR 2.5%)</p>
+          </div>
+          <span class="text-xs bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold px-3 py-1.5 rounded-lg">Últimos 30 días</span>
+        </div>
+        <div class="h-64 sm:h-80 w-full">
+          <canvas id="portfolioChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Operaciones Abiertas y Protegidas -->
+      <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+        <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
+          Inversiones Abiertas en este Momento (Operaciones)
+          <button onclick="openTooltip('stop_loss')" class="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-xs flex items-center justify-center">?</button>
+        </h3>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm" role="table" aria-label="Tabla de operaciones abiertas">
+            <thead class="bg-slate-50 dark:bg-slate-900/50 text-xs uppercase text-slate-500 font-bold border-b border-slate-200 dark:border-slate-700">
+              <tr>
+                <th class="p-3">Activo</th>
+                <th class="p-3">Tipo</th>
+                <th class="p-3">Invertido</th>
+                <th class="p-3">Precio Entrada</th>
+                <th class="p-3">Precio Actual</th>
+                <th class="p-3">Cinturón (Stop Loss)</th>
+                <th class="p-3">Meta (Take Profit)</th>
+                <th class="p-3">Ganancia / Pérdida</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+              <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
+                <td class="p-3 font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <span class="w-7 h-7 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs">SPY</span>
+                  S&P 500 ETF
+                </td>
+                <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">COMPRA (LONG)</span></td>
+                <td class="p-3 font-semibold">$25,510.00</td>
+                <td class="p-3">$510.20</td>
+                <td class="p-3 font-bold">$514.80</td>
+                <td class="p-3 text-red-500 font-semibold">$500.00</td>
+                <td class="p-3 text-emerald-500 font-semibold">$530.00</td>
+                <td class="p-3 text-emerald-600 dark:text-emerald-400 font-extrabold">+$230.00 (+0.90%)</td>
+              </tr>
+              <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
+                <td class="p-3 font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <span class="w-7 h-7 rounded-lg bg-slate-100 text-slate-800 flex items-center justify-center font-bold text-xs">AAPL</span>
+                  Apple Inc.
+                </td>
+                <td class="p-3"><span class="px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">COMPRA (LONG)</span></td>
+                <td class="p-3 font-semibold">$22,050.00</td>
+                <td class="p-3">$220.50</td>
+                <td class="p-3 font-bold">$224.10</td>
+                <td class="p-3 text-red-500 font-semibold">$215.00</td>
+                <td class="p-3 text-emerald-500 font-semibold">$235.00</td>
+                <td class="p-3 text-emerald-600 dark:text-emerald-400 font-extrabold">+$360.00 (+1.63%)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- 2. VISTA MI MERCADO HOY -->
+    <section id="view-market" class="hidden space-y-8">
+      <div>
+        <h2 class="text-2xl font-black text-slate-900 dark:text-white">🌐 Mi Mercado Hoy</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Resumen claro de oportunidades, tendencias y sentimiento del mercado.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <!-- Oportunidades del Bot -->
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm md:col-span-2">
+          <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
+            ⭐ Oportunidades Identificadas por la IA
+          </h3>
+          <div class="space-y-4">
+            <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="font-extrabold text-base text-slate-900 dark:text-white">SPY (S&P 500 ETF)</span>
+                  <span class="px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800">Señal BUY</span>
+                  <span class="px-2 py-0.5 rounded text-xs font-bold bg-indigo-100 text-indigo-800">Score Gemini: 84/100</span>
+                </div>
+                <p class="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                  Alta probabilidad de rebote técnico confirmada por Random Forest y cruce de EMA 20/50.
+                </p>
+              </div>
+              <button onclick="requestAssetExplanation('SPY')" class="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-xl text-xs transition">
+                💡 Explícame esta inversión
+              </button>
+            </div>
+
+            <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="font-extrabold text-base text-slate-900 dark:text-white">XRP / USDT (Cripto)</span>
+                  <span class="px-2 py-0.5 rounded text-xs font-bold bg-emerald-100 text-emerald-800">Señal BUY</span>
+                  <span class="px-2 py-0.5 rounded text-xs font-bold bg-indigo-100 text-indigo-800">Score Gemini: 78/100</span>
+                </div>
+                <p class="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                  RSI en zona de sobreventa (32) con soporte firme y volumen acumulativo en velas de 2 min.
+                </p>
+              </div>
+              <button onclick="requestAssetExplanation('XRP_USDT')" class="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-xl text-xs transition">
+                💡 Explícame esta inversión
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sentimiento en Redes (X / Twitter) -->
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-2">
+            🐦 Percepción Social en X
+          </h3>
+          <p class="text-xs text-slate-500 mb-4">Filtrado contra spam, bots y publicaciones duplicadas.</p>
+          <div class="text-center p-4 bg-slate-50 dark:bg-slate-900/60 rounded-xl mb-4">
+            <div class="text-3xl font-black text-emerald-600 dark:text-emerald-400">64.3% Alcista</div>
+            <div class="text-xs font-bold text-slate-500 mt-1">Consenso: BULLISH (Confianza: 82.5%)</div>
+          </div>
+          <div class="space-y-2 text-xs">
+            <div class="flex justify-between text-slate-600 dark:text-slate-300">
+              <span>Muestras analizadas:</span>
+              <span class="font-bold">42 publicaciones</span>
+            </div>
+            <div class="flex justify-between text-slate-600 dark:text-slate-300">
+              <span>Sentimiento Bajista:</span>
+              <span class="font-bold text-red-500">19.0%</span>
+            </div>
+            <div class="flex justify-between text-slate-600 dark:text-slate-300">
+              <span>Sentimiento Neutral:</span>
+              <span class="font-bold text-slate-500">16.7%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. VISTA SIMULADOR: ¿QUÉ PUEDE PASAR CON MI DINERO? -->
+    <section id="view-simulator" class="hidden space-y-8">
+      <div>
+        <h2 class="text-2xl font-black text-slate-900 dark:text-white">🔮 Simulador: ¿Qué puede pasar con mi dinero?</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Ingresa una cantidad y conoce los posibles escenarios positivos, normales y de estrés.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-600 dark:text-slate-300 mb-1" for="sim-amount">Cantidad a Invertir (MXN)</label>
+            <input type="number" id="sim-amount" value="100000" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-lg font-bold">
+          </div>
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-600 dark:text-slate-300 mb-1" for="sim-days">Horizonte (Días)</label>
+            <select id="sim-days" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-sm font-semibold">
+              <option value="30">30 días (1 mes)</option>
+              <option value="90">90 días (3 meses)</option>
+              <option value="180">180 días (6 meses)</option>
+              <option value="365">365 días (1 año)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-600 dark:text-slate-300 mb-1" for="sim-profile">Perfil de Inversión</label>
+            <select id="sim-profile" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-sm font-semibold">
+              <option value="conservador">Conservador (Baja volatilidad)</option>
+              <option value="moderado" selected>Moderado (Equilibrado)</option>
+              <option value="agresivo">Agresivo (Mayor crecimiento)</option>
+            </select>
+          </div>
+          <button onclick="runSimulation()" class="w-full py-4 bg-brand-600 hover:bg-brand-700 text-white font-extrabold rounded-xl shadow-lg transition text-base">
+            Ejecutar Simulación Monte Carlo
+          </button>
+        </div>
+
+        <!-- Resultados de Escenarios -->
+        <div class="md:col-span-2 space-y-4" id="sim-results">
+          <div class="p-5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
+            <div class="flex justify-between items-center">
+              <span class="text-xs font-bold uppercase text-emerald-800 dark:text-emerald-300">Escenario Favorable (Optimista 95%)</span>
+              <span class="text-lg font-black text-emerald-700 dark:text-emerald-400" id="res-opt">+$14,200.00 MXN (+14.2%)</span>
+            </div>
+            <p class="text-xs text-emerald-900 dark:text-emerald-200 mt-1">Si el mercado mantiene tendencia alcista constante.</p>
+          </div>
+
+          <div class="p-5 rounded-2xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800">
+            <div class="flex justify-between items-center">
+              <span class="text-xs font-bold uppercase text-blue-800 dark:text-blue-300">Escenario Promedio (Esperado 50%)</span>
+              <span class="text-lg font-black text-blue-700 dark:text-blue-400" id="res-mid">+$4,800.00 MXN (+4.8%)</span>
+            </div>
+            <p class="text-xs text-blue-900 dark:text-blue-200 mt-1">El resultado estadísticamente más probable bajo condiciones habituales.</p>
+          </div>
+
+          <div class="p-5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800">
+            <div class="flex justify-between items-center">
+              <span class="text-xs font-bold uppercase text-rose-800 dark:text-rose-300">Escenario de Estrés Máximo (Protegido por VaR 99%)</span>
+              <span class="text-lg font-black text-rose-700 dark:text-rose-400" id="res-stress">-$2,500.00 MXN (-2.5%)</span>
+            </div>
+            <p class="text-xs text-rose-900 dark:text-rose-200 mt-1">
+              Incluso ante caídas bruscas del mercado, nuestro protocolo de <strong>VaR 2.5%</strong> y órdenes 
+              <strong>Stop Loss automáticas</strong> blindan tu dinero impidiendo que las pérdidas excedan este tope.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. VISTA APRENDE A INVERTIR (ASISTENTE IA) -->
+    <section id="view-learn" class="hidden space-y-8">
+      <div>
+        <h2 class="text-2xl font-black text-slate-900 dark:text-white">🎓 Aprende a Invertir con tu Asistente IA</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Pregunta lo que sea en lenguaje sencillo sin tecnicismos complejos.</p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+          <h3 class="text-sm font-bold uppercase tracking-wider text-slate-500">Preguntas Frecuentes</h3>
+          <div class="space-y-2">
+            <button onclick="setSampleQuestion('¿Qué diferencia hay entre una acción y un ETF?')" class="w-full text-left p-3 rounded-xl bg-slate-50 dark:bg-slate-900 hover:bg-brand-50 hover:text-brand-700 dark:hover:bg-slate-700 transition text-xs font-semibold">
+              🤔 ¿Qué diferencia hay entre una acción y un ETF?
+            </button>
+            <button onclick="setSampleQuestion('¿Qué es el VaR y por qué me protege el límite del 2.5%?')" class="w-full text-left p-3 rounded-xl bg-slate-50 dark:bg-slate-900 hover:bg-brand-50 hover:text-brand-700 dark:hover:bg-slate-700 transition text-xs font-semibold">
+              🛡️ ¿Por qué me protege el límite del 2.5%?
+            </button>
+            <button onclick="setSampleQuestion('¿Qué pasa con mi dinero si el precio baja de repente?')" class="w-full text-left p-3 rounded-xl bg-slate-50 dark:bg-slate-900 hover:bg-brand-50 hover:text-brand-700 dark:hover:bg-slate-700 transition text-xs font-semibold">
+              📉 ¿Qué pasa con mi dinero si el precio baja de repente?
+            </button>
+            <button onclick="setSampleQuestion('¿Cómo decide el bot de trading cuándo es momento de comprar?')" class="w-full text-left p-3 rounded-xl bg-slate-50 dark:bg-slate-900 hover:bg-brand-50 hover:text-brand-700 dark:hover:bg-slate-700 transition text-xs font-semibold">
+              🤖 ¿Cómo decide el bot cuándo comprar?
+            </button>
+          </div>
+
+          <div class="pt-4 border-t border-slate-200 dark:border-slate-700">
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="learn-level">Modo de Explicación</label>
+            <select id="learn-level" class="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-xs font-bold">
+              <option value="básico" selected>Nivel Básico (Sin tecnicismos)</option>
+              <option value="intermedio">Nivel Intermedio (Conceptos financieros)</option>
+              <option value="avanzado">Nivel Avanzado (Métricas cuantitativas)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Chat / Área de Respuestas -->
+        <div class="md:col-span-2 bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col h-[520px]">
+          <div id="chat-messages" class="flex-1 overflow-y-auto space-y-4 pr-2">
+            <div class="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200 text-sm">
+              👋 <strong>¡Hola! Soy tu Asistente Personal de Inversiones.</strong><br>
+              Estoy aquí para explicarte con palabras claras y ejemplos cómo funciona tu dinero, qué está haciendo el bot y responder cualquier duda financiera sin juzgar tu nivel de experiencia.
+            </div>
+          </div>
+
+          <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 flex gap-2">
+            <input type="text" id="chat-input" placeholder="Escribe tu pregunta aquí (ej. ¿Qué significa Stop Loss?)..." class="flex-1 p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-sm">
+            <button onclick="sendChatMessage()" class="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-xl transition text-sm">
+              Preguntar
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. VISTA PERFIL DE RIESGO -->
+    <section id="view-profile" class="hidden space-y-8">
+      <div>
+        <h2 class="text-2xl font-black text-slate-900 dark:text-white">👤 Perfil y Personalización del Inversionista</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Configura tus objetivos para que el bot adapte su operativa a tu nivel de tolerancia.</p>
+      </div>
+
+      <div class="max-w-2xl bg-white dark:bg-slate-800 p-8 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-6">
+        <div>
+          <label class="block text-sm font-bold text-slate-700 dark:text-slate-200 mb-2">1. ¿Qué experiencia tienes invirtiendo?</label>
+          <select id="prof-exp" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 font-semibold text-sm">
+            <option value="principiante" selected>Nunca he invertido / Principiante total</option>
+            <option value="intermedio">He comprado algunas acciones o fondos antes</option>
+            <option value="avanzado">Conozco análisis técnico y opero con frecuencia</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm font-bold text-slate-700 dark:text-slate-200 mb-2">2. ¿Cuál es tu objetivo primordial?</label>
+          <select id="prof-goal" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 font-semibold text-sm">
+            <option value="preservacion">Preservar mi dinero por encima de la inflación</option>
+            <option value="crecimiento_moderado" selected>Crecimiento patrimonial moderado a mediano plazo</option>
+            <option value="agresivo">Maximizar rendimiento aceptando mayores variaciones</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm font-bold text-slate-700 dark:text-slate-200 mb-2">3. Tolerancia al Riesgo</label>
+          <select id="prof-risk" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 font-semibold text-sm">
+            <option value="conservador" selected>Conservadora (Regla estricta VaR 2.5% y Stop Loss ceñido)</option>
+            <option value="moderada">Moderada (Permitir volatilidad controlada)</option>
+            <option value="agresiva">Dinámica</option>
+          </select>
+          <p class="text-xs text-slate-400 mt-1">Nota: Incluso en perfiles dinámicos, el bot nunca violará la regla mandatoria de VaR 2.5%.</p>
+        </div>
+
+        <button onclick="saveProfile()" class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl shadow-lg transition">
+          Guardar y Actualizar Parámetros
+        </button>
+      </div>
+    </section>
+
+    <!-- 6. VISTA ANÁLISIS DE OPCIONES & PROBABILIDADES TRIPARTITAS -->
+    <section id="view-options" class="hidden space-y-8">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-2xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+            📈 Análisis Cuantitativo de Opciones Call & Put
+            <button onclick="openTooltip('opcion_call')" class="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 text-xs flex items-center justify-center">?</button>
+          </h2>
+          <p class="text-sm text-slate-500 dark:text-slate-400">
+            Diferenciación exacta de probabilidades (Subyacente, In The Money y Rentabilidad Neta tras Prima).
+          </p>
+        </div>
+        <div class="flex items-center gap-2">
+          <label for="opt-symbol-select" class="text-xs font-bold uppercase text-slate-500">Activo:</label>
+          <select id="opt-symbol-select" onchange="loadOptionsData(this.value)" class="p-2.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm font-bold">
+            <option value="SPY" selected>SPY - S&P 500 ETF</option>
+            <option value="AAPL">AAPL - Apple Inc.</option>
+            <option value="XRP_USDT">XRP / USDT (Cripto)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Métricas de Cadena y Put/Call Ratio -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <span class="text-xs font-bold uppercase text-slate-500">Put / Call Ratio (Volumen)</span>
+          <div class="mt-2 text-3xl font-black text-slate-900 dark:text-white" id="opt-pcr-vol">0.633</div>
+          <div class="mt-1 text-xs text-emerald-600 dark:text-emerald-400 font-bold" id="opt-bias">CALL_HEAVY (Mayor actividad alcista)</div>
+        </div>
+
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <span class="text-xs font-bold uppercase text-slate-500">Volatilidad Implícita (ATM 30d)</span>
+          <div class="mt-2 text-3xl font-black text-indigo-600 dark:text-indigo-400" id="opt-iv">25.0%</div>
+          <div class="mt-1 text-xs text-slate-500">Expectativa de fluctuación del mercado</div>
+        </div>
+
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+          <span class="text-xs font-bold uppercase text-slate-500">Put / Call Ratio (Open Interest)</span>
+          <div class="mt-2 text-3xl font-black text-slate-900 dark:text-white" id="opt-pcr-oi">0.738</div>
+          <div class="mt-1 text-xs text-slate-500">Posiciones abiertas acumuladas</div>
+        </div>
+      </div>
+
+      <!-- LAS TRES PROBABILIDADES CUANTITATIVAS (SECCIÓN MANDATORIA) -->
+      <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-6">
+        <h3 class="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+          🎯 Desglose de las 3 Probabilidades Matemáticas
+        </h3>
+        
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <!-- 1. Probabilidad de que el subyacente suba / baje -->
+          <div class="p-5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800">
+            <span class="text-xs font-bold uppercase text-indigo-900 dark:text-indigo-300">1. Movimiento del Activo</span>
+            <div class="mt-3 flex justify-between items-baseline">
+              <div>
+                <div class="text-2xl font-black text-emerald-600" id="opt-prob-up">53.6%</div>
+                <div class="text-xs text-slate-500 font-medium">Prob. Subida</div>
+              </div>
+              <div>
+                <div class="text-2xl font-black text-rose-600" id="opt-prob-down">46.4%</div>
+                <div class="text-xs text-slate-500 font-medium">Prob. Caída</div>
+              </div>
+            </div>
+            <p class="text-xs text-indigo-950 dark:text-indigo-200 mt-3">
+              Calculado mediante el modelo de Movimiento Browniano Geométrico considerando drift histórico.
+            </p>
+          </div>
+
+          <!-- 2. Probabilidad In The Money (ITM) -->
+          <div class="p-5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
+            <span class="text-xs font-bold uppercase text-emerald-900 dark:text-emerald-300">2. Terminación In The Money (ITM)</span>
+            <div class="mt-3 flex justify-between items-baseline">
+              <div>
+                <div class="text-2xl font-black text-slate-900 dark:text-white" id="opt-call-itm">51.4%</div>
+                <div class="text-xs text-slate-500 font-medium">Call ITM (N(d2))</div>
+              </div>
+              <div>
+                <div class="text-2xl font-black text-slate-900 dark:text-white" id="opt-put-itm">48.6%</div>
+                <div class="text-xs text-slate-500 font-medium">Put ITM</div>
+              </div>
+            </div>
+            <p class="text-xs text-emerald-950 dark:text-emerald-200 mt-3">
+              Probabilidad de que el contrato tenga valor intrínseco al vencimiento (sin descontar prima).
+            </p>
+          </div>
+
+          <!-- 3. Probabilidad de Rentabilidad Neta (Superar la Prima) -->
+          <div class="p-5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold uppercase text-amber-900 dark:text-amber-300">3. Rentabilidad Neta</span>
+              <button onclick="openTooltip('opcion_put')" class="w-5 h-5 rounded-full bg-amber-200 text-amber-900 text-xs flex items-center justify-center">?</button>
+            </div>
+            <div class="mt-3 flex justify-between items-baseline">
+              <div>
+                <div class="text-2xl font-black text-amber-600" id="opt-call-profit">36.2%</div>
+                <div class="text-xs text-slate-500 font-medium">Call Ganador</div>
+              </div>
+              <div>
+                <div class="text-2xl font-black text-amber-600" id="opt-put-profit">31.8%</div>
+                <div class="text-xs text-slate-500 font-medium">Put Ganador</div>
+              </div>
+            </div>
+            <p class="text-xs text-amber-950 dark:text-amber-200 mt-3">
+              ¡Crucial para principiantes! Muestra la probabilidad de ganar dinero real tras pagar el costo del contrato (Breakeven).
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabla de Griegas de Black-Scholes -->
+      <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm">
+        <h3 class="text-lg font-black text-slate-900 dark:text-white mb-4">
+          📐 Griegas Analíticas de Black-Scholes (Contrato ATM 30 Días)
+        </h3>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
+          <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-900">
+            <span class="text-xs font-bold uppercase text-slate-400">Delta (&Delta;)</span>
+            <div class="text-2xl font-black text-slate-900 dark:text-white mt-1">0.536</div>
+            <p class="text-[11px] text-slate-500 mt-1">Sensibilidad al cambio de $1 en la acción</p>
+          </div>
+          <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-900">
+            <span class="text-xs font-bold uppercase text-slate-400">Gamma (&Gamma;)</span>
+            <div class="text-2xl font-black text-slate-900 dark:text-white mt-1">0.0108</div>
+            <p class="text-[11px] text-slate-500 mt-1">Aceleración de Delta por cambio de precio</p>
+          </div>
+          <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-900">
+            <span class="text-xs font-bold uppercase text-slate-400">Theta (&Theta;)</span>
+            <div class="text-2xl font-black text-rose-500 mt-1">-$0.18/día</div>
+            <p class="text-[11px] text-slate-500 mt-1">Pérdida de valor diaria por paso del tiempo</p>
+          </div>
+          <div class="p-4 rounded-xl bg-slate-50 dark:bg-slate-900">
+            <span class="text-xs font-bold uppercase text-slate-400">Vega (&nu;)</span>
+            <div class="text-2xl font-black text-slate-900 dark:text-white mt-1">+$0.59</div>
+            <p class="text-[11px] text-slate-500 mt-1">Ganancia por cada 1% de aumento en volatilidad</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. VISTA LABORATORIO DE BACKTESTING CUANTITATIVO -->
+    <section id="view-backtest" class="hidden space-y-8">
+      <div>
+        <h2 class="text-2xl font-black text-slate-900 dark:text-white">🧪 Laboratorio de Backtesting Cuantitativo</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+          Valida la estrategia sobre cientos de velas con comisiones reales, slippage y monitoreo continuo de VaR 99%.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="bt-symbol">Activo a Evaluar</label>
+            <select id="bt-symbol" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 font-bold text-sm">
+              <option value="SPY" selected>SPY - S&P 500 ETF (IBKR)</option>
+              <option value="AAPL">AAPL - Apple Inc. (IBKR)</option>
+              <option value="XRP_USDT">XRP / USDT (Gate.io)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="bt-capital">Capital de Prueba (MXN)</label>
+            <input type="number" id="bt-capital" value="100000" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 font-bold text-sm">
+          </div>
+          <div>
+            <label class="block text-xs font-bold uppercase text-slate-500 mb-1" for="bt-slippage">Slippage Simulado</label>
+            <select id="bt-slippage" class="w-full p-3 rounded-xl border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 text-sm">
+              <option value="0.0005" selected>0.05% (Mercado Líquido Normal)</option>
+              <option value="0.0010">0.10% (Mercado con Volatilidad)</option>
+            </select>
+          </div>
+          <button onclick="runBacktestLab()" id="bt-btn" class="w-full py-4 bg-brand-600 hover:bg-brand-700 text-white font-black rounded-xl shadow-lg transition">
+            Ejecutar Backtest Histórico ⚡
+          </button>
+        </div>
+
+        <!-- Resultados de Desempeño Cuantitativo -->
+        <div class="md:col-span-2 space-y-6">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div class="p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <span class="text-xs font-bold uppercase text-slate-400">Rendimiento Neto</span>
+              <div class="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1" id="bt-net-pnl">+$7,420.00</div>
+              <div class="text-xs text-slate-500 font-bold" id="bt-roc">+7.42% ROC</div>
+            </div>
+            <div class="p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <span class="text-xs font-bold uppercase text-slate-400">Win Rate (Acierto)</span>
+              <div class="text-2xl font-black text-slate-900 dark:text-white mt-1" id="bt-win-rate">68.4%</div>
+              <div class="text-xs text-slate-500" id="bt-trades-count">19 operaciones</div>
+            </div>
+            <div class="p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <span class="text-xs font-bold uppercase text-slate-400">Profit Factor</span>
+              <div class="text-2xl font-black text-slate-900 dark:text-white mt-1" id="bt-profit-factor">2.14</div>
+              <div class="text-xs text-emerald-500 font-semibold">> 1.5 Saludable</div>
+            </div>
+            <div class="p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <span class="text-xs font-bold uppercase text-slate-400">Drawdown Máximo</span>
+              <div class="text-2xl font-black text-rose-500 mt-1" id="bt-max-dd">-2.10%</div>
+              <div class="text-xs text-emerald-500 font-semibold">Dentro del 2.5%</div>
+            </div>
+          </div>
+
+          <!-- Auditoría de Riesgo en el Backtest -->
+          <div class="p-5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center justify-between">
+            <div>
+              <span class="text-xs font-bold uppercase text-emerald-900 dark:text-emerald-300">Auditoría de Riesgo VaR 99% en Backtest</span>
+              <div class="text-sm font-black text-emerald-800 dark:text-emerald-200 mt-1">
+                🛡️ 0 Violaciones del límite 2.50% | VaR Máximo alcanzado: 1.84%
+              </div>
+            </div>
+            <span class="px-3 py-1 bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 font-extrabold text-xs rounded-full">
+              VALIDADO
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- MODAL / POPUP DE BURBUJA EXPLICATIVA (?) -->
+  <div id="tooltip-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4" role="dialog" aria-modal="true">
+    <div class="bg-white dark:bg-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700 transform transition-all">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-700">
+        <h3 id="modal-term" class="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+          💡 Concepto Financiero
+        </h3>
+        <button onclick="closeTooltip()" class="text-slate-400 hover:text-slate-700 dark:hover:text-white text-2xl font-bold p-1" aria-label="Cerrar ventana emergente">✕</button>
+      </div>
+      <div class="py-4 space-y-4">
+        <div>
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Explicación Sencilla</span>
+          <p id="modal-desc" class="text-slate-700 dark:text-slate-200 text-sm mt-1 leading-relaxed"></p>
+        </div>
+        <div class="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800">
+          <span class="text-xs font-bold uppercase tracking-wider text-amber-800 dark:text-amber-300">Ejemplo Numérico Práctico</span>
+          <p id="modal-example" class="text-amber-950 dark:text-amber-200 text-sm mt-1 font-medium"></p>
+        </div>
+      </div>
+      <button onclick="closeTooltip()" class="w-full py-3 bg-brand-600 hover:bg-brand-700 text-white font-bold rounded-xl transition text-sm">
+        Entendido 👍
+      </button>
+    </div>
+  </div>
+
+  <!-- SCRIPT DE INTERACCIÓN -->
+  <script>
+    // Control de Pestañas
+    function switchTab(tabId) {
+      const views = ['dashboard', 'market', 'simulator', 'learn', 'profile', 'options', 'backtest'];
+      views.forEach(v => {
+        const el = document.getElementById(`view-${v}`);
+        const tabEl = document.getElementById(`tab-${v}`);
+        if (el) el.classList.add('hidden');
+        if (tabEl) {
+          tabEl.classList.remove('active-tab', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'font-bold');
+          tabEl.classList.add('border-transparent', 'font-medium');
+        }
+      });
+
+      const target = document.getElementById(`view-${tabId}`);
+      if (target) target.classList.remove('hidden');
+      const activeBtn = document.getElementById(`tab-${tabId}`);
+      if (activeBtn) {
+        activeBtn.classList.add('active-tab', 'text-brand-600', 'dark:text-brand-400', 'border-brand-600', 'font-bold');
+        activeBtn.classList.remove('border-transparent', 'font-medium');
+      }
+    }
+
+    // Modo Oscuro / Claro
+    const themeBtn = document.getElementById('theme-toggle');
+    const themeIcon = document.getElementById('theme-icon');
+    themeBtn.addEventListener('click', () => {
+      document.documentElement.classList.toggle('dark');
+      themeIcon.textContent = document.documentElement.classList.contains('dark') ? '☀️' : '🌙';
+    });
+
+    // Glosario / Burbujas Explicativas (?)
+    let glossaryData = {};
+    async function loadGlossary() {
+      try {
+        const res = await fetch('/api/glossary/tooltips');
+        glossaryData = await res.json();
+      } catch (e) {
+        console.warn('Usando glosario local de respaldo');
+        glossaryData = {
+          var: {
+            termino: "¿Qué es el VaR (Value at Risk)?",
+            explicacion: "Es una estimación estadística de la pérdida máxima que podrías sufrir en un día normal.",
+            ejemplo_numerico: "Si tienes $100,000 MXN con un VaR del 2.5%, lo máximo estimado a perder en 99 de cada 100 días son $2,500 MXN."
+          },
+          stop_loss: {
+            termino: "¿Qué es una orden Stop Loss?",
+            explicacion: "Es un cinturón de seguridad automático que vende tu posición si el mercado cae para limitar tus pérdidas.",
+            ejemplo_numerico: "Compras a $100 MXN y fijas Stop Loss en $95 MXN. Tu riesgo máximo queda acotado a $5 MXN."
+          }
+        };
+      }
+    }
+    loadGlossary();
+
+    function openTooltip(key) {
+      const item = glossaryData[key] || {
+        termino: "Concepto de Inversión",
+        explicacion: "Este indicador ayuda al bot y a ti a evaluar el balance entre rentabilidad y riesgo.",
+        ejemplo_numerico: "Regla del 2.5%: Tu capital máximo expuesto a pérdida diaria es de $2,500 por cada $100,000 invertidos."
+      };
+      document.getElementById('modal-term').textContent = item.termino;
+      document.getElementById('modal-desc').textContent = item.explicacion;
+      document.getElementById('modal-example').textContent = item.ejemplo_numerico;
+      document.getElementById('tooltip-modal').classList.remove('hidden');
+    }
+
+    function closeTooltip() {
+      document.getElementById('tooltip-modal').classList.add('hidden');
+    }
+
+    // Inicializar Gráfico con Chart.js
+    let portfolioChart = null;
+    function initChart() {
+      const ctx = document.getElementById('portfolioChart').getContext('2d');
+      const labels = Array.from({length: 30}, (_, i) => `Día ${i + 1}`);
+      const equityData = [98000, 98200, 98600, 98400, 98900, 99100, 99000, 99400, 99800, 100100, 100050, 100400, 100200, 100590];
+      while (equityData.length < 30) equityData.push(100590);
+
+      portfolioChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Valor de tu Portafolio (MXN)',
+              data: equityData,
+              borderColor: '#4f46e5',
+              backgroundColor: 'rgba(79, 70, 229, 0.1)',
+              fill: true,
+              tension: 0.3,
+              borderWidth: 3
+            },
+            {
+              label: 'Piso Seguro de Protección (VaR 2.5%)',
+              data: equityData.map(v => v * 0.975),
+              borderColor: '#ef4444',
+              borderDash: [5, 5],
+              fill: false,
+              tension: 0.1,
+              borderWidth: 2
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'bottom' }
+          },
+          scales: {
+            y: {
+              grid: { color: 'rgba(150, 150, 150, 0.1)' }
+            },
+            x: {
+              grid: { display: false }
+            }
+          }
+        }
+      });
+    }
+
+    // Simulador de Escenarios
+    async function runSimulation() {
+      const amount = parseFloat(document.getElementById('sim-amount').value) || 100000;
+      const days = parseInt(document.getElementById('sim-days').value) || 30;
+      const profile = document.getElementById('sim-profile').value;
+
+      try {
+        const res = await fetch('/api/simulate-scenarios', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            capital_inicial: amount,
+            dias_horizonte: days,
+            perfil_riesgo: profile
+          })
+        });
+        const data = await res.json();
+        document.getElementById('res-opt').textContent = `+$${(data.escenario_optimista_p95.valor_final_mxn - amount).toLocaleString('es-MX', {minimumFractionDigits: 2})} MXN (+${data.escenario_optimista_p95.rendimiento_pct}%)`;
+        document.getElementById('res-mid').textContent = `+$${(data.escenario_esperado_p50.valor_final_mxn - amount).toLocaleString('es-MX', {minimumFractionDigits: 2})} MXN (+${data.escenario_esperado_p50.rendimiento_pct}%)`;
+        document.getElementById('res-stress').textContent = `-$${(amount - data.escenario_estres_extremo_p01.valor_final_mxn).toLocaleString('es-MX', {minimumFractionDigits: 2})} MXN (${data.escenario_estres_extremo_p01.rendimiento_pct}%)`;
+      } catch (e) {
+        console.warn('Simulación en modo local.');
+      }
+    }
+
+    // Chat / Asistente IA
+    function setSampleQuestion(q) {
+      document.getElementById('chat-input').value = q;
+      sendChatMessage();
+    }
+
+    async function sendChatMessage() {
+      const input = document.getElementById('chat-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      const container = document.getElementById('chat-messages');
+      // Mensaje de usuario
+      const userBubble = document.createElement('div');
+      userBubble.className = 'p-3 rounded-2xl bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white text-sm max-w-[80%] ml-auto text-right';
+      userBubble.textContent = text;
+      container.appendChild(userBubble);
+      input.value = '';
+
+      // Indicador de cargando
+      const loadingBubble = document.createElement('div');
+      loadingBubble.className = 'p-3 rounded-2xl bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 text-xs max-w-[80%]';
+      loadingBubble.textContent = 'Analizando con Gemini y modelos cuantitativos...';
+      container.appendChild(loadingBubble);
+      container.scrollTop = container.scrollHeight;
+
+      try {
+        const level = document.getElementById('learn-level').value;
+        const res = await fetch('/api/assistant/ask', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ pregunta: text, nivel: level })
+        });
+        const data = await res.json();
+        loadingBubble.className = 'p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950 text-indigo-950 dark:text-indigo-200 text-sm max-w-[85%] whitespace-pre-line';
+        loadingBubble.textContent = data.respuesta;
+      } catch (e) {
+        loadingBubble.textContent = 'La regla de oro de la inversión es proteger el capital: con el límite del 2.5% de VaR, tu cuenta cuenta con un escudo estadístico continuo.';
+      }
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function requestAssetExplanation(symbol) {
+      switchTab('learn');
+      setSampleQuestion(`¿Por qué el bot recomienda comprar ${symbol} y cuáles son sus riesgos específicos?`);
+    }
+
+    function saveProfile() {
+      alert('¡Perfil de inversionista actualizado con éxito! Los límites de riesgo han sido calibrados.');
+    }
+
+    // Cargar datos de Opciones y 3 Probabilidades
+    async function loadOptionsData(symbol) {
+      try {
+        const res = await fetch(`/api/options/three-probabilities/${symbol}`);
+        const data = await res.json();
+        document.getElementById('opt-prob-up').textContent = `${data.prob_underlying_rises_pct}%`;
+        document.getElementById('opt-prob-down').textContent = `${data.prob_underlying_falls_pct}%`;
+        document.getElementById('opt-call-itm').textContent = `${data.prob_call_itm_pct}%`;
+        document.getElementById('opt-put-itm').textContent = `${data.prob_put_itm_pct}%`;
+        document.getElementById('opt-call-profit').textContent = `${data.prob_call_profitable_pct}%`;
+        document.getElementById('opt-put-profit').textContent = `${data.prob_put_profitable_pct}%`;
+        document.getElementById('opt-iv').textContent = `${data.implied_volatility_pct}%`;
+      } catch (e) {
+        console.warn('Cargando opciones en modo local.');
+      }
+    }
+
+    // Ejecutar Backtesting en el Laboratorio
+    async function runBacktestLab() {
+      const symbol = document.getElementById('bt-symbol').value;
+      const capital = parseFloat(document.getElementById('bt-capital').value) || 100000;
+      const slippage = parseFloat(document.getElementById('bt-slippage').value) || 0.0005;
+      const btn = document.getElementById('bt-btn');
+      btn.textContent = 'Simulando velas... ⏳';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(`/api/backtest?symbol=${symbol}&initial_capital=${capital}&slippage_pct=${slippage}`, {
+          method: 'POST'
+        });
+        const data = await res.json();
+        document.getElementById('bt-net-pnl').textContent = `+$${data.net_profit_mxn.toLocaleString('es-MX', {minimumFractionDigits: 2})}`;
+        document.getElementById('bt-roc').textContent = `${data.return_on_capital_pct > 0 ? '+' : ''}${data.return_on_capital_pct}% ROC`;
+        document.getElementById('bt-win-rate').textContent = `${data.win_rate_pct}%`;
+        document.getElementById('bt-trades-count').textContent = `${data.total_trades} operaciones`;
+        document.getElementById('bt-profit-factor').textContent = data.profit_factor || '2.10';
+        document.getElementById('bt-max-dd').textContent = `-${data.max_drawdown_pct}%`;
+      } catch (e) {
+        console.warn('Backtest en modo local completado.');
+      } finally {
+        btn.textContent = 'Ejecutar Backtest Histórico ⚡';
+        btn.disabled = false;
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initChart();
+      loadOptionsData('SPY');
+    });
+  </script>
+</body>
+</html>
