@@ -10,6 +10,8 @@ import {
   ExternalLink,
   Lock,
   MessageSquare,
+  Pause,
+  Play,
   RefreshCw,
   Send,
   Server,
@@ -18,14 +20,22 @@ import {
   UserCheck,
   Users,
 } from 'lucide-react';
+import { auth } from '../firebase';
 import type { InvestorEvaluationResult } from '../utils/investorProfileEngine';
 
 interface TelegramConfigPayload {
   botUsername: string | null;
   botId: string | null;
+  botFirstName?: string | null;
   telegramUrl: string | null;
   webhookPath: string;
   isTokenConfigured: boolean;
+  webhookUrl?: string | null;
+  webhookConnected?: boolean;
+  pollingActive?: boolean;
+  pollingState?: 'inactive' | 'active' | 'paused_by_user' | 'yielded_to_external_python' | 'webhook_mode';
+  pendingUpdateCount?: number;
+  lastErrorMessage?: string | null;
   commands: string[];
 }
 
@@ -131,19 +141,73 @@ export const BotTelegramView: React.FC<BotTelegramViewProps> = ({
   const [testingSignal, setTestingSignal] = useState<boolean>(false);
   const [signalResult, setSignalResult] = useState<SignalTestResult | null>(null);
 
+  // Conexión directa Polling / Webhook Telegram & Simulador
+  const [togglingPolling, setTogglingPolling] = useState<boolean>(false);
+  const [connectingWebhook, setConnectingWebhook] = useState<boolean>(false);
+  const [webhookActionFeedback, setWebhookActionFeedback] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const [tgSimCommand, setTgSimCommand] = useState<string>('/clasificar 3,3,4,3,3,4,3,4');
+  const [tgSimBusy, setTgSimBusy] = useState<boolean>(false);
+  const [tgSimReply, setTgSimReply] = useState<string | null>(null);
+
   const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
   const wsOrigin = origin.replace(/^http/, 'ws');
   const wsFullUrl = `${wsOrigin}${status?.websocketPath || '/ws/trading-bot'}`;
   const webhookFullUrl = `${origin}${status?.telegram?.webhookPath || '/api/telegram/webhook'}`;
 
+  const getUiHeaders = useCallback(async (withJson = false): Promise<Record<string, string>> => {
+    const headers: Record<string, string> = {};
+    if (withJson) headers['Content-Type'] = 'application/json';
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (token) headers['x-firebase-token'] = token;
+    } catch {
+      // ignore if user token unavailable
+    }
+    return headers;
+  }, []);
+
   const fetchGatewayStatus = useCallback(async () => {
     setLoadingStatus(true);
     setStatusError(null);
     try {
-      const res = await fetch('/api/bot/v1/status');
+      const headers = await getUiHeaders(false);
+      const res = await fetch('/api/bot/v1/status', { headers });
       if (res.status === 401) {
+        // Still load public Telegram config so @username / Bot ID appear cleanly
+        try {
+          const tgRes = await fetch('/api/bot/v1/telegram/config');
+          if (tgRes.ok) {
+            const tgData = (await tgRes.json()) as TelegramConfigPayload;
+            setStatus((prev) => ({
+              online: true,
+              service: 'Smart Invest Trading Bot Gateway',
+              protocol: 'v1',
+              activeHttpPort: prev?.activeHttpPort ?? 3000,
+              dedicatedLocalBotPort: prev?.dedicatedLocalBotPort ?? null,
+              websocketPath: '/ws/trading-bot',
+              endpoints: prev?.endpoints ?? {
+                status: '/api/bot/v1/status',
+                market: '/api/bot/v1/market',
+                classifyUser: '/api/bot/v1/classify-user',
+                signal: '/api/bot/v1/signal',
+                telegramWebhook: '/api/telegram/webhook',
+              },
+              commissionRatePct: 0.1,
+              maxPortfolioVar99Pct: 2.5,
+              supportedSymbols: prev?.supportedSymbols ?? ['SPY', 'AAPL', 'NVDA', 'MSFT', 'AMZN', 'LLY', 'XOM', 'WALMEX', 'GFNORTE', 'XRP_USDT'],
+              requiresBearerToken: true,
+              telegram: tgData,
+              timestampIso: new Date().toISOString(),
+            }));
+          }
+        } catch {
+          // ignore
+        }
         setStatusError(
-          'El endpoint del bot está protegido con BOT_API_SECRET en el servidor. Puedes probar la conexión directamente desde Python enviando el header Authorization: Bearer <BOT_API_SECRET>.'
+          'Tu servidor tiene BOT_API_SECRET activo para scripts Python externos. Inicia sesión en la app para operar la consola web o envía Authorization: Bearer <BOT_API_SECRET> desde Python.'
         );
         return;
       }
@@ -155,7 +219,7 @@ export const BotTelegramView: React.FC<BotTelegramViewProps> = ({
     } finally {
       setLoadingStatus(false);
     }
-  }, []);
+  }, [getUiHeaders]);
 
   useEffect(() => {
     void fetchGatewayStatus();
@@ -324,9 +388,10 @@ if __name__ == "__main__":
 
     setClassifying(true);
     try {
+      const headers = await getUiHeaders(true);
       const res = await fetch('/api/bot/v1/classify-user', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           telegramUsername: telegramHandleInput.trim() || '@nuevo_usuario',
           horizonMonths: h,
@@ -353,9 +418,10 @@ if __name__ == "__main__":
     setTestingSignal(true);
     try {
       const portfolioBase = totalPortfolioMxn > 0 ? totalPortfolioMxn : (usdMxnRate || 19.5) * 10000;
+      const headers = await getUiHeaders(true);
       const res = await fetch('/api/bot/v1/signal', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           symbol: signalSymbol,
           side: 'BUY',
@@ -371,6 +437,115 @@ if __name__ == "__main__":
       onNotifyToast('Error al evaluar señal en /api/bot/v1/signal.', 'warning');
     } finally {
       setTestingSignal(false);
+    }
+  };
+
+  const handleToggleTelegramPolling = async (action: 'start' | 'stop') => {
+    setTogglingPolling(true);
+    setWebhookActionFeedback(null);
+    try {
+      const headers = await getUiHeaders(true);
+      const res = await fetch('/api/bot/v1/telegram/polling', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        telegram?: TelegramConfigPayload;
+      };
+      if (!res.ok || !data.ok) {
+        const errMsg = data.error || 'No se pudo actualizar el modo Polling de Telegram.';
+        setWebhookActionFeedback({ ok: false, message: errMsg });
+        onNotifyToast(errMsg, 'warning');
+        return;
+      }
+      if (data.telegram) {
+        setStatus((prev) => (prev ? { ...prev, telegram: data.telegram! } : prev));
+      } else {
+        await fetchGatewayStatus();
+      }
+      const okMsg =
+        data.message ||
+        (action === 'start'
+          ? 'Bot de Telegram escuchando en vivo (Polling activo).'
+          : 'Bot de Telegram pausado para permitir tu script Python local.');
+      setWebhookActionFeedback({ ok: true, message: okMsg });
+      onNotifyToast(okMsg, action === 'start' ? 'success' : 'info');
+    } catch {
+      const msg = 'No se pudo contactar al servidor para cambiar el estado del bot en Telegram.';
+      setWebhookActionFeedback({ ok: false, message: msg });
+      onNotifyToast(msg, 'warning');
+    } finally {
+      setTogglingPolling(false);
+    }
+  };
+
+  const handleConnectTelegramWebhook = async () => {
+    setConnectingWebhook(true);
+    setWebhookActionFeedback(null);
+    try {
+      const headers = await getUiHeaders(true);
+      const res = await fetch('/api/bot/v1/telegram/connect-webhook', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ origin }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+        telegram?: TelegramConfigPayload;
+      };
+      if (!res.ok || !data.ok) {
+        const errMsg = data.error || 'No se pudo activar el Webhook en Telegram.';
+        setWebhookActionFeedback({ ok: false, message: errMsg });
+        onNotifyToast(errMsg, 'warning');
+        return;
+      }
+      if (data.telegram) {
+        setStatus((prev) => (prev ? { ...prev, telegram: data.telegram! } : prev));
+      } else {
+        await fetchGatewayStatus();
+      }
+      const okMsg = data.message || 'Webhook de Telegram activado correctamente.';
+      setWebhookActionFeedback({ ok: true, message: okMsg });
+      onNotifyToast(okMsg, 'success');
+    } catch {
+      const msg = 'No se pudo contactar al servidor para activar el Webhook.';
+      setWebhookActionFeedback({ ok: false, message: msg });
+      onNotifyToast(msg, 'warning');
+    } finally {
+      setConnectingWebhook(false);
+    }
+  };
+
+  const handleSimulateTelegramCommand = async (customCmd?: string) => {
+    const cmdText = (customCmd ?? tgSimCommand).trim();
+    if (!cmdText) return;
+    if (customCmd) setTgSimCommand(customCmd);
+    setTgSimBusy(true);
+    try {
+      const res = await fetch('/api/telegram/webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dryRun: true,
+          message: {
+            chat: { id: 999000111 },
+            from: { username: 'inversionista_prueba', first_name: 'Prueba' },
+            text: cmdText,
+          },
+        }),
+      });
+      const data = (await res.json()) as { replyText?: string };
+      setTgSimReply(data.replyText || 'Sin respuesta del webhook.');
+    } catch {
+      onNotifyToast('No se pudo probar el comando en /api/telegram/webhook.', 'warning');
+    } finally {
+      setTgSimBusy(false);
     }
   };
 
@@ -497,17 +672,43 @@ if __name__ == "__main__":
         </div>
 
         <div className="p-4 rounded-xl bg-white dark:bg-[#0E131B] border border-slate-200 dark:border-slate-800 space-y-1.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400">
-            <Bot className="w-4 h-4 text-violet-500" />
-            Bot de Telegram (@username / ID)
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <Bot className="w-4 h-4 text-violet-500" />
+              Bot de Telegram (@username / ID)
+            </span>
+            <span
+              className={`font-mono text-[10px] font-bold ${
+                telegramCfg?.pollingActive || telegramCfg?.webhookConnected
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : telegramCfg?.pollingState === 'yielded_to_external_python'
+                  ? 'text-sky-600 dark:text-sky-400'
+                  : telegramCfg?.isTokenConfigured
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-rose-500'
+              }`}
+            >
+              {telegramCfg?.pollingActive
+                ? 'EN VIVO (POLLING)'
+                : telegramCfg?.webhookConnected
+                ? 'WEBHOOK ACTIVO'
+                : telegramCfg?.pollingState === 'yielded_to_external_python'
+                ? 'PYTHON LOCAL ACTIVO'
+                : telegramCfg?.pollingState === 'paused_by_user'
+                ? 'PAUSADO (PYTHON LOCAL)'
+                : telegramCfg?.isTokenConfigured
+                ? 'LISTO PARA ACTIVAR'
+                : 'SIN TOKEN'}
+            </span>
           </div>
           <div className="text-sm font-bold text-slate-900 dark:text-white">
             {telegramCfg?.botUsername
-              ? `@${telegramCfg.botUsername}`
-              : 'Pendiente de vincular con @BotFather'}
+              ? `@${telegramCfg.botUsername}${telegramCfg.botFirstName ? ` · ${telegramCfg.botFirstName}` : ''}`
+              : 'Pendiente: agrega TELEGRAM_BOT_TOKEN'}
           </div>
           <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
-            Bot ID: {telegramCfg?.botId || 'No configurado en Secrets'} · Token: {telegramCfg?.isTokenConfigured ? 'Configurado' : 'Pendiente'}
+            Bot ID: {telegramCfg?.botId || 'Se detecta automático al poner el token'} · Token:{' '}
+            {telegramCfg?.isTokenConfigured ? 'Configurado' : 'Pendiente en Secrets'}
           </div>
         </div>
       </div>
@@ -651,15 +852,15 @@ if __name__ == "__main__":
           <div className="space-y-6">
             {/* Telegram */}
             <div className="p-5 rounded-xl bg-white dark:bg-[#0E131B] border border-slate-200 dark:border-slate-800 space-y-4">
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="flex items-center gap-2.5">
                   <MessageSquare className="w-5 h-5 text-sky-500 shrink-0" />
                   <div>
                     <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                      Integración de Bot en Telegram (Usuarios Avanzados y Clasificación)
+                      Integración de Bot en Telegram (Modo Bot en Vivo · Polling / Webhook)
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
-                      El webhook responde comandos de Telegram en tiempo real y clasifica nuevos usuarios hacia tu servidor.
+                      El servidor lee tu token <code className="font-mono">TELEGRAM_BOT_TOKEN</code> y responde directo en Telegram usando <strong>Polling saliente</strong> (sin bloqueos 302 en vista previa) o mediante Webhook en tu URL pública.
                     </p>
                   </div>
                 </div>
@@ -676,63 +877,205 @@ if __name__ == "__main__":
                 )}
               </div>
 
-              <div className="p-3.5 rounded-lg bg-sky-50 dark:bg-sky-950/25 border border-sky-200 dark:border-sky-900 text-xs text-sky-950 dark:text-sky-100 space-y-2">
-                <p className="font-semibold">
-                  ¿Cómo agregar tu ID / Bot de Telegram para que los usuarios lo vean aquí?
-                </p>
-                <ol className="list-decimal pl-4 space-y-1 text-[11px] opacity-95">
-                  <li>
-                    En Telegram abre <strong>@BotFather</strong> y ejecuta <code className="font-mono">/newbot</code> para obtener tu Token, tu <code className="font-mono">@username</code> y tu <strong>Bot ID</strong> numérico.
-                  </li>
-                  <li>
-                    Por seguridad, los tokens secretos no se escriben en pantalla: agrégalos en <strong>Settings → Secrets</strong> como <code className="font-mono">TELEGRAM_BOT_TOKEN</code>, <code className="font-mono">TELEGRAM_BOT_USERNAME</code> y <code className="font-mono">TELEGRAM_BOT_ID</code>.
-                  </li>
-                  <li>
-                    Registra el Webhook apuntando al servidor para que Telegram envíe los comandos <code className="font-mono">/clasificar</code> y <code className="font-mono">/avanzado</code>:
-                  </li>
-                </ol>
+              {/* Estado de los 3 pasos de conexión real */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+                <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 space-y-1">
+                  <div className="font-bold text-slate-900 dark:text-white">1. Bot Detectado</div>
+                  <p className="text-slate-600 dark:text-slate-400">
+                    {telegramCfg?.botUsername
+                      ? `@${telegramCfg.botUsername} (ID ${telegramCfg.botId}) listo para responder comandos.`
+                      : 'Crea tu bot en @BotFather (/newbot) y copia el token.'}
+                  </p>
+                </div>
+                <div
+                  className={`p-3 rounded-lg border space-y-1 ${
+                    telegramCfg?.isTokenConfigured
+                      ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/20'
+                      : 'border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/20'
+                  }`}
+                >
+                  <div className="font-bold text-slate-900 dark:text-white">
+                    2. Token en Secrets {telegramCfg?.isTokenConfigured ? '✓ Listo' : '· Pendiente'}
+                  </div>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    <code className="font-mono">TELEGRAM_BOT_TOKEN</code> cargado en el servidor para enviar respuestas reales a Telegram.
+                  </p>
+                </div>
+                <div
+                  className={`p-3 rounded-lg border space-y-1 ${
+                    telegramCfg?.pollingActive || telegramCfg?.webhookConnected
+                      ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/20'
+                      : 'border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/20'
+                  }`}
+                >
+                  <div className="font-bold text-slate-900 dark:text-white">
+                    3. Canal en Vivo{' '}
+                    {telegramCfg?.pollingActive
+                      ? '✓ Polling Activo'
+                      : telegramCfg?.webhookConnected
+                      ? '✓ Webhook Activo'
+                      : telegramCfg?.pollingState === 'paused_by_user' ||
+                        telegramCfg?.pollingState === 'yielded_to_external_python'
+                      ? '· En pausa (Python local)'
+                      : ''}
+                  </div>
+                  <p className="text-slate-600 dark:text-slate-300">
+                    En vista previa (<code className="font-mono">ais-dev</code>) se usa <strong>Polling directo</strong> para evitar redirecciones 302. Pausa con 1 clic si correrás tu propio script Python.
+                  </p>
+                </div>
               </div>
 
-              <div className="space-y-2 text-xs">
-                <div className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800">
-                  <div className="min-w-0">
-                    <span className="text-[11px] text-slate-500 block">Webhook URL del Servidor</span>
-                    <span className="font-mono text-slate-900 dark:text-slate-100 break-all">{webhookFullUrl}</span>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => void handleToggleTelegramPolling('start')}
+                  disabled={togglingPolling}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  {togglingPolling
+                    ? 'Actualizando bot...'
+                    : 'Activar / Reanudar Bot en Telegram (En Vivo)'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleToggleTelegramPolling('stop')}
+                  disabled={togglingPolling}
+                  className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  <Pause className="w-3.5 h-3.5" />
+                  Pausar para usar mi script Python local
+                </button>
+              </div>
+
+              {telegramCfg?.pollingState === 'yielded_to_external_python' && (
+                <div className="p-3 rounded-lg border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/30 text-xs text-sky-900 dark:text-sky-200">
+                  Se detectó otro script de Python escuchando este mismo bot (<code className="font-mono">HTTP 409</code>). Smart Invest cedió el control automáticamente para no interferir con tu bot local. Cuando quieras que responda este servidor, presiona <strong>Activar / Reanudar Bot en Telegram (En Vivo)</strong>.
+                </div>
+              )}
+
+              {telegramCfg?.pollingState === 'paused_by_user' && (
+                <div className="p-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-900 dark:text-amber-200">
+                  El polling de Smart Invest está pausado para que puedas correr tu script local en Python (por ejemplo <code className="font-mono">Activar trading</code> / <code className="font-mono">Obtener Excel</code>). Presiona el botón verde cuando quieras reactivar las respuestas desde aquí.
+                </div>
+              )}
+
+              {webhookActionFeedback && (
+                <div
+                  className={`p-3 rounded-lg border text-xs ${
+                    webhookActionFeedback.ok
+                      ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200'
+                      : 'border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200'
+                  }`}
+                >
+                  {webhookActionFeedback.message}
+                </div>
+              )}
+
+              {telegramCfg?.lastErrorMessage && (
+                <div className="p-2.5 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/30 text-[11px] text-rose-800 dark:text-rose-200">
+                  Último aviso reportado por Telegram: <code className="font-mono">{telegramCfg.lastErrorMessage}</code>
+                </div>
+              )}
+
+              {/* Simulador en vivo de comandos de Telegram */}
+              <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-slate-900 dark:text-white">
+                    Probar respuesta real del Bot aquí (antes o después de conectar Telegram)
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {['/start', '/clasificar 3,3,4,3,3,4,3,4', '/mercado NVDA', '/avanzado'].map((presetCmd) => (
+                      <button
+                        key={presetCmd}
+                        type="button"
+                        onClick={() => void handleSimulateTelegramCommand(presetCmd)}
+                        className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 text-[10px] font-mono font-semibold hover:bg-slate-200 dark:hover:bg-slate-800 cursor-pointer"
+                      >
+                        {presetCmd.split(' ')[0]}
+                      </button>
+                    ))}
                   </div>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={tgSimCommand}
+                    onChange={(e) => setTgSimCommand(e.target.value)}
+                    placeholder="/clasificar 3,3,4,3,3,4,3,4"
+                    className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono"
+                  />
                   <button
                     type="button"
-                    onClick={() => void copyText(webhookFullUrl, 'Webhook URL')}
-                    className="px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-[11px] font-semibold shrink-0 cursor-pointer"
+                    onClick={() => void handleSimulateTelegramCommand()}
+                    disabled={tgSimBusy}
+                    className="px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-emerald-600 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
                   >
-                    Copiar
+                    {tgSimBusy ? 'Probando...' : 'Probar'}
                   </button>
                 </div>
+                {tgSimReply && (
+                  <pre className="p-3 rounded-lg bg-slate-950 text-sky-200 text-[11px] font-mono whitespace-pre-wrap border border-slate-800">
+                    {tgSimReply}
+                  </pre>
+                )}
+              </div>
 
-                <div className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800">
-                  <div className="min-w-0">
-                    <span className="text-[11px] text-slate-500 block">Comando para activar Webhook en Telegram</span>
-                    <span className="font-mono text-[11px] text-slate-800 dark:text-slate-200 break-all">{setWebhookCmd}</span>
+              <details className="text-[11px] text-slate-500 dark:text-slate-400">
+                <summary className="cursor-pointer font-semibold hover:text-slate-800 dark:hover:text-slate-200">
+                  Opciones avanzadas: Webhook en URL pública publicada (Shared App URL) y curl
+                </summary>
+                <div className="mt-2.5 space-y-2.5 text-xs">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => void handleConnectTelegramWebhook()}
+                      disabled={connectingWebhook}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      {connectingWebhook
+                        ? 'Conectando Webhook...'
+                        : telegramCfg?.webhookConnected
+                        ? 'Re-sincronizar Webhook y Comandos'
+                        : 'Activar Webhook en esta URL pública'}
+                    </button>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                      {telegramCfg?.webhookConnected && telegramCfg.webhookUrl
+                        ? `Webhook activo en: ${telegramCfg.webhookUrl}`
+                        : 'Úsalo solo cuando abras la app publicada (Shared App URL sin login Google).'}
+                    </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void copyText(setWebhookCmd, 'Comando setWebhook')}
-                    className="px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-[11px] font-semibold shrink-0 cursor-pointer"
-                  >
-                    Copiar
-                  </button>
-                </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
-                <div className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
-                  <div className="font-mono font-bold text-slate-900 dark:text-white">/clasificar 3,3,4,3,3,4,3,4</div>
-                  <div className="text-slate-500 dark:text-slate-400">Evalúa a un usuario nuevo y decide si entra al servidor avanzado.</div>
+                  <div className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800">
+                    <div className="min-w-0">
+                      <span className="text-[11px] text-slate-500 block">Webhook URL del Servidor</span>
+                      <span className="font-mono text-slate-900 dark:text-slate-100 break-all">{webhookFullUrl}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void copyText(webhookFullUrl, 'Webhook URL')}
+                      className="px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-[11px] font-semibold shrink-0 cursor-pointer"
+                    >
+                      Copiar
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800">
+                    <div className="min-w-0">
+                      <span className="text-[11px] text-slate-500 block">Comando manual setWebhook (curl)</span>
+                      <span className="font-mono text-[11px] text-slate-800 dark:text-slate-200 break-all">{setWebhookCmd}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void copyText(setWebhookCmd, 'Comando setWebhook')}
+                      className="px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-[11px] font-semibold shrink-0 cursor-pointer"
+                    >
+                      Copiar
+                    </button>
+                  </div>
                 </div>
-                <div className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800">
-                  <div className="font-mono font-bold text-slate-900 dark:text-white">/avanzado y /mercado NVDA</div>
-                  <div className="text-slate-500 dark:text-slate-400">Entrega rutas WebSocket/REST y cotización en vivo Yahoo Finance.</div>
-                </div>
-              </div>
+              </details>
             </div>
 
             {/* Clasificador en vivo de nuevos usuarios */}

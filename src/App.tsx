@@ -487,8 +487,17 @@ function AppAuthenticatedContent({
               portfolioVarPct={engine.portfolioVarPct}
               totalCommissionSavedMxn={engine.totalCommissionSavedMxn}
               positions={engine.positions}
+              optionPositions={engine.optionPositions}
+              orders={engine.orders}
               stockMap={engine.stockMap}
               equityHistory={engine.equityHistory}
+              portfolioCreatedAtIso={engine.portfolioCreatedAtIso}
+              equityTimeline={engine.equityTimeline}
+              weeklyTransfer={engine.weeklyTransfer}
+              canTransferWeekly10k={engine.canTransferWeekly10k}
+              nextWeeklyTransferAtIso={engine.nextWeeklyTransferAtIso}
+              daysUntilNextWeeklyTransfer={engine.daysUntilNextWeeklyTransfer}
+              onTransferWeekly10k={engine.transferWeekly10k}
               news={engine.news}
               alarms={engine.alarms}
               favoriteSectors={engine.favoriteSectors}
@@ -505,6 +514,7 @@ function AppAuthenticatedContent({
               onQuickSell={(symbol, shares) =>
                 engine.executeTrade({ symbol, side: 'SELL', shares, orderType: 'MARKET' })
               }
+              onCloseOptionPosition={engine.closeOptionPosition}
               onOpenTooltip={setActiveTooltipKey}
               onSimulateShock={engine.simulateMarketShock}
               investorProfilePanel={

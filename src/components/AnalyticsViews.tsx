@@ -6,6 +6,7 @@ import { markOptionPositionToMarket, priceBlackScholesOption } from '../utils/bl
 import { computeFiscalSummary, exportOrdersToFiscalCsv } from '../utils/fiscalCsvExport';
 import { formatSavedTimestamp } from '../utils/portfolioStorage';
 import { AlarmSoundStyleSection } from './AlarmSoundStyleSection';
+import { OptionBellCurveChart } from './OptionBellCurveChart';
 import { SvgAreaChart } from './SvgAreaChart';
 import { VoiceLivePanel } from './VoiceLivePanel';
 
@@ -868,6 +869,27 @@ export const OptionsView: React.FC<OptionsViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Gráfica de Campana (Distribución de Probabilidad Black-Scholes al Vencimiento) */}
+      <OptionBellCurveChart
+        symbol={symbol}
+        optionType={optionType}
+        spotMxn={spotMxn}
+        strikeMxn={strikeMxn}
+        breakevenMxn={liveBsQuote.breakevenMxn}
+        daysToExpiration={daysToExpiration}
+        impliedVolatilityPct={effectiveIvPct}
+        probItmPct={
+          optionType === 'CALL'
+            ? (data?.prob_call_itm_pct ?? liveBsQuote.probItmPct)
+            : (data?.prob_put_itm_pct ?? liveBsQuote.probItmPct)
+        }
+        probProfitablePct={
+          optionType === 'CALL'
+            ? (data?.prob_call_profitable_pct ?? liveBsQuote.probItmPct)
+            : (data?.prob_put_profitable_pct ?? liveBsQuote.probItmPct)
+        }
+      />
 
       {data && (
         <>

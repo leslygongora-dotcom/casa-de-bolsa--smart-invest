@@ -108,9 +108,10 @@ export function markOptionPositionToMarket(
   });
   const totalShares = pos.contracts * pos.contractMultiplier;
   const currentValueMxn = Number((quote.premiumPerShareMxn * totalShares).toFixed(2));
-  const entryCost = Math.max(0.01, pos.totalCostMxn);
+  const entryCost = Math.max(0.01, pos.totalCostMxn + (pos.commissionPaidMxn || 0));
   const pnlMxn = Number((currentValueMxn - entryCost).toFixed(2));
-  const pnlPct = Number(((pnlMxn / entryCost) * 100).toFixed(2));
+  const rawPct = (pnlMxn / entryCost) * 100;
+  const pnlPct = Number((Number.isFinite(rawPct) ? rawPct : 0).toFixed(2));
   return {
     quote,
     remainingDays: Number(remainingDays.toFixed(1)),

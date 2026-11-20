@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { HelpCircle, ShieldCheck } from 'lucide-react';
+import { CalendarClock, HelpCircle, ShieldCheck } from 'lucide-react';
 import {
   CartesianGrid,
   Line,
@@ -9,67 +9,167 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import type { EquityTimelinePoint } from '../types';
 
 interface PortfolioRechartsWidgetProps {
   currentPortfolioMxn: number;
   equityHistory: number[];
+  portfolioCreatedAtIso: string;
+  equityTimeline: EquityTimelinePoint[];
   onOpenTooltip: (key: string) => void;
 }
 
-type TimeRange = '7D' | '15D' | '30D' | '90D';
+type TimeRange = 'ALL' | '24H' | '7D' | '30D';
+
+function formatAxisLabel(iso: string, spanMs: number): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'Inicio';
+  if (spanMs <= 48 * 60 * 60 * 1000) {
+    return d.toLocaleString('es-MX', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+  return d.toLocaleDateString('es-MX', {
+    day: '2-digit',
+    month: 'short',
+  });
+}
 
 export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = ({
   currentPortfolioMxn,
   equityHistory,
+  portfolioCreatedAtIso,
+  equityTimeline,
   onOpenTooltip,
 }) => {
-  const [range, setRange] = useState<TimeRange>('30D');
+  const [range, setRange] = useState<TimeRange>('ALL');
+
+  const createdAtMs = useMemo(() => {
+    const parsed = new Date(portfolioCreatedAtIso).getTime();
+    return Number.isFinite(parsed) ? parsed : Date.now();
+  }, [portfolioCreatedAtIso]);
+
+  const createdFormatted = useMemo(() => {
+    const d = new Date(createdAtMs);
+    return d.toLocaleString('es-MX', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }, [createdAtMs]);
 
   const chartData = useMemo(() => {
-    const daysMap: Record<TimeRange, number> = {
-      '7D': 7,
-      '15D': 15,
-      '30D': 30,
-      '90D': 90,
-    };
-    const totalDays = daysMap[range];
-    const baseSeed = equityHistory[0] ?? 0;
-    const endValue = Number.isFinite(currentPortfolioMxn)
-      ? currentPortfolioMxn
-      : (equityHistory[equityHistory.length - 1] ?? 0);
+    const nowMs = Date.now();
+    const safeCurrent = Number.isFinite(currentPortfolioMxn)
+      ? Number(currentPortfolioMxn.toFixed(2))
+      : 0;
 
-    // Build deterministic, smooth historical points ending on live currentPortfolioMxn
-    const startOffset =
-      range === '7D' ? 0.992 : range === '15D' ? 0.981 : range === '30D' ? 0.964 : 0.915;
-    const startVal = endValue <= 0 ? 0 : Math.min(baseSeed > 0 ? baseSeed : endValue * startOffset, endValue * startOffset);
+    // Build chronological points strictly starting at portfolio creation
+    const sourcePoints: EquityTimelinePoint[] =
+      equityTimeline.length > 0
+        ? [...equityTimeline]
+        : equityHistory.map((val, idx) => ({
+            timestampIso: new Date(
+              createdAtMs + ((nowMs - createdAtMs) * idx) / Math.max(1, equityHistory.length - 1)
+            ).toISOString(),
+            equityMxn: Number((Number.isFinite(val) ? val : 0).toFixed(2)),
+            eventLabel: idx === 0 ? 'Creación del portafolio' : undefined,
+          }));
 
-    const points: { label: string; portafolio: number; pisoVar: number; deltaPct: number }[] = [];
-    const now = new Date();
+    const clamped = sourcePoints
+      .map((pt) => {
+        const ms = new Date(pt.timestampIso).getTime();
+        return {
+          ms: Number.isFinite(ms) ? Math.max(createdAtMs, ms) : createdAtMs,
+          timestampIso: pt.timestampIso,
+          equityMxn: Number((Number.isFinite(pt.equityMxn) ? pt.equityMxn : 0).toFixed(2)),
+          eventLabel: pt.eventLabel,
+        };
+      })
+      .sort((a, b) => a.ms - b.ms);
 
-    for (let i = 0; i < totalDays; i++) {
-      const progress = totalDays === 1 ? 1 : i / (totalDays - 1);
-      const date = new Date(now);
-      date.setDate(now.getDate() - (totalDays - 1 - i));
-      const label = date.toLocaleDateString('es-MX', { day: '2-digit', month: 'short' });
-
-      const wave =
-        endValue <= 0
-          ? 0
-          : Math.sin(i * 0.65) * (endValue * 0.0035) + Math.cos(i * 0.3) * (endValue * 0.002);
-      const val =
-        endValue <= 0
-          ? 0
-          : i === totalDays - 1
-          ? endValue
-          : Number((startVal + (endValue - startVal) * progress + wave).toFixed(2));
-      const pisoVar = Number((val * 0.975).toFixed(2));
-      const deltaPct = startVal > 0 ? Number((((val - startVal) / startVal) * 100).toFixed(2)) : 0;
-      points.push({ label, portafolio: val, pisoVar, deltaPct });
+    if (clamped.length === 0) {
+      clamped.push({
+        ms: createdAtMs,
+        timestampIso: new Date(createdAtMs).toISOString(),
+        equityMxn: 0,
+        eventLabel: 'Creación del portafolio',
+      });
     }
-    return points;
-  }, [range, currentPortfolioMxn, equityHistory]);
 
-  const firstVal = chartData[0]?.portafolio ?? currentPortfolioMxn;
+    const windowMsMap: Record<TimeRange, number> = {
+      ALL: Infinity,
+      '24H': 24 * 60 * 60 * 1000,
+      '7D': 7 * 24 * 60 * 60 * 1000,
+      '30D': 30 * 24 * 60 * 60 * 1000,
+    };
+    const cutoffMs =
+      range === 'ALL' ? createdAtMs : Math.max(createdAtMs, nowMs - windowMsMap[range]);
+
+    const filtered = clamped.filter((pt) => pt.ms >= cutoffMs);
+    const activePoints = filtered.length > 0 ? filtered : [clamped[clamped.length - 1]];
+
+    // Ensure live "Ahora" point reflects currentPortfolioMxn
+    const lastPt = activePoints[activePoints.length - 1];
+    if (
+      !lastPt ||
+      Math.abs(lastPt.equityMxn - safeCurrent) >= 0.01 ||
+      nowMs - lastPt.ms > 30000
+    ) {
+      activePoints.push({
+        ms: Math.max(nowMs, (lastPt?.ms ?? createdAtMs) + 1000),
+        timestampIso: new Date().toISOString(),
+        equityMxn: safeCurrent,
+        eventLabel: 'Valor actual',
+      });
+    }
+
+    // If only 1 point exists (brand new portfolio), duplicate creation -> now so line renders cleanly
+    if (activePoints.length === 1) {
+      activePoints.push({
+        ms: Math.max(nowMs, activePoints[0].ms + 1000),
+        timestampIso: new Date().toISOString(),
+        equityMxn: safeCurrent,
+        eventLabel: 'Valor actual',
+      });
+    }
+
+    const spanMs = Math.max(1000, activePoints[activePoints.length - 1].ms - activePoints[0].ms);
+    const startVal = activePoints[0].equityMxn;
+
+    return activePoints.map((pt, idx) => {
+      const pisoVar = Number((pt.equityMxn * 0.975).toFixed(2));
+      const deltaPct =
+        startVal > 0 ? Number((((pt.equityMxn - startVal) / startVal) * 100).toFixed(2)) : 0;
+      return {
+        label:
+          idx === 0 && pt.ms === createdAtMs
+            ? `Inicio (${formatAxisLabel(pt.timestampIso, spanMs)})`
+            : idx === activePoints.length - 1
+            ? 'Ahora'
+            : formatAxisLabel(pt.timestampIso, spanMs),
+        fullTimestamp: new Date(pt.ms).toLocaleString('es-MX', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        eventLabel: pt.eventLabel,
+        portafolio: pt.equityMxn,
+        pisoVar,
+        deltaPct,
+      };
+    });
+  }, [range, currentPortfolioMxn, equityHistory, equityTimeline, createdAtMs]);
+
+  const firstVal = chartData[0]?.portafolio ?? 0;
   const lastVal = chartData[chartData.length - 1]?.portafolio ?? currentPortfolioMxn;
   const periodChangeMxn = lastVal - firstVal;
   const periodChangePct = firstVal > 0 ? (periodChangeMxn / firstVal) * 100 : 0;
@@ -78,9 +178,9 @@ export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = (
     <div className="p-6 rounded-lg bg-white dark:bg-[#0E131B] border border-slate-200 dark:border-slate-800/90 space-y-5">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">
-              Evolución Patrimonial del Portafolio
+              Evolución Patrimonial del Portafolio (Desde Creación)
             </h3>
             <button
               onClick={() => onOpenTooltip('volatilidad')}
@@ -90,24 +190,29 @@ export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = (
               <HelpCircle className="w-4 h-4" />
             </button>
           </div>
-          <p className="text-sm text-slate-600 dark:text-slate-300">
-            Variación neta en los últimos <strong>{range}</strong>:{' '}
-            <span
-              className={`font-mono font-bold tabular-nums ${
-                periodChangeMxn >= 0
-                  ? 'text-emerald-600 dark:text-emerald-400'
-                  : 'text-rose-600 dark:text-rose-400'
-              }`}
-            >
-              {periodChangeMxn >= 0 ? '+' : ''}$
-              {periodChangeMxn.toLocaleString('es-MX', {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}{' '}
-              MXN ({periodChangePct >= 0 ? '+' : ''}
-              {periodChangePct.toFixed(2)}%)
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs sm:text-sm text-slate-600 dark:text-slate-300">
+            <span className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+              <CalendarClock className="w-3.5 h-3.5 text-emerald-500" />
+              Creado: <strong className="text-slate-700 dark:text-slate-200">{createdFormatted}</strong>
             </span>
-          </p>
+            <span>
+              Variación neta:{' '}
+              <span
+                className={`font-mono font-bold tabular-nums ${
+                  periodChangeMxn >= 0
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-rose-600 dark:text-rose-400'
+                }`}
+              >
+                {periodChangeMxn >= 0 ? '+' : '-'}$
+                {Math.abs(periodChangeMxn).toLocaleString('es-MX', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{' '}
+                MXN{firstVal > 0 ? ` (${periodChangePct >= 0 ? '+' : ''}${periodChangePct.toFixed(2)}%)` : ''}
+              </span>
+            </span>
+          </div>
         </div>
 
         {/* Selector de Escala Temporal */}
@@ -116,23 +221,25 @@ export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = (
           role="group"
           aria-label="Seleccionar escala de tiempo"
         >
-          {(['7D', '15D', '30D', '90D'] as TimeRange[]).map((scale) => (
+          {(
+            [
+              { id: 'ALL', label: 'Desde creación' },
+              { id: '24H', label: '24 horas' },
+              { id: '7D', label: '7 días' },
+              { id: '30D', label: '30 días' },
+            ] as { id: TimeRange; label: string }[]
+          ).map((scale) => (
             <button
-              key={scale}
-              onClick={() => setRange(scale)}
+              key={scale.id}
+              type="button"
+              onClick={() => setRange(scale.id)}
               className={`px-3 py-1.5 rounded text-xs sm:text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap ${
-                range === scale
+                range === scale.id
                   ? 'bg-slate-900 text-white dark:bg-emerald-600 dark:text-white'
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              {scale === '7D'
-                ? '7 días'
-                : scale === '15D'
-                ? '15 días'
-                : scale === '30D'
-                ? '30 días'
-                : '90 días'}
+              {scale.label}
             </button>
           ))}
         </div>
@@ -151,7 +258,7 @@ export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = (
               minTickGap={24}
             />
             <YAxis
-              domain={['auto', 'auto']}
+              domain={[0, 'auto']}
               tick={{ fill: '#94a3b8', fontSize: 12 }}
               tickLine={false}
               axisLine={{ stroke: '#334155' }}
@@ -167,6 +274,11 @@ export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = (
                 fontSize: '13px',
               }}
               labelStyle={{ color: '#cbd5e1', fontWeight: 700, marginBottom: '4px' }}
+              labelFormatter={(_label, payload) => {
+                const pt = payload?.[0]?.payload as { fullTimestamp?: string; eventLabel?: string } | undefined;
+                if (!pt) return String(_label);
+                return pt.eventLabel ? `${pt.fullTimestamp} · ${pt.eventLabel}` : pt.fullTimestamp || String(_label);
+              }}
               formatter={(value: unknown, name: unknown) => {
                 const num = Number(value) || 0;
                 const label =
@@ -186,8 +298,9 @@ export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = (
               name="portafolio"
               stroke="#10b981"
               strokeWidth={2.5}
-              dot={false}
+              dot={chartData.length <= 16 ? { r: 3, fill: '#10b981' } : false}
               activeDot={{ r: 5, fill: '#10b981', stroke: '#ffffff', strokeWidth: 2 }}
+              isAnimationActive={false}
             />
             <Line
               type="monotone"
@@ -197,6 +310,7 @@ export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = (
               strokeWidth={1.75}
               strokeDasharray="5 4"
               dot={false}
+              isAnimationActive={false}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -207,7 +321,7 @@ export const PortfolioRechartsWidget: React.FC<PortfolioRechartsWidgetProps> = (
         <div className="flex flex-wrap items-center gap-6">
           <span className="inline-flex items-center gap-2 font-medium">
             <span className="w-4 h-0.5 rounded bg-emerald-500 inline-block" />
-            Valor patrimonial (MXN)
+            Evolución real desde creación (MXN)
           </span>
           <span className="inline-flex items-center gap-2 font-medium">
             <span className="w-4 h-0.5 border-t-2 border-dashed border-rose-500 inline-block" />

@@ -9,6 +9,7 @@ import {
   AlarmToneKind,
   DeepAnalysisResult,
   EmailMessage,
+  EquityTimelinePoint,
   InvestorProfile,
   MobileAlarm,
   NewsItem,
@@ -19,6 +20,7 @@ import {
   StockAsset,
   TonePreset,
   TradeOrder,
+  WeeklyTransferState,
 } from '../types';
 import {
   playAlarmSound,
@@ -46,6 +48,8 @@ const ALL_SECTORS: Sector[] = [
 ];
 
 const GAME_MODE_DAILY_USD = 10000;
+const WEEKLY_TRANSFER_AMOUNT_MXN = 10000;
+const WEEKLY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 const FALLBACK_USD_MXN_RATE = 20.0;
 
 function getTodayLocalDateKey(): string {
@@ -56,24 +60,35 @@ function getTodayLocalDateKey(): string {
   return `${y}-${m}-${d}`;
 }
 
-function createEmptyBucket(): PortfolioSnapshotBucket {
+function createDefaultWeeklyTransferState(): WeeklyTransferState {
+  return {
+    lastTransferIso: null,
+    transfersCount: 0,
+    totalTransferredMxn: 0,
+  };
+}
+
+function createEmptyBucket(createdIso = new Date().toISOString()): PortfolioSnapshotBucket {
   return {
     cashMxn: 0,
     positions: [],
     optionPositions: [],
     orders: [],
     equityHistory: [0],
+    portfolioCreatedAtIso: createdIso,
+    equityTimeline: [{ timestampIso: createdIso, equityMxn: 0, eventLabel: 'Creación del portafolio ($0)' }],
+    weeklyTransfer: createDefaultWeeklyTransferState(),
   };
 }
 
-function createDefaultGameModeState(): GameModeState {
+function createDefaultGameModeState(createdIso = new Date().toISOString()): GameModeState {
   return {
     enabled: false,
     lastGrantDate: null,
     daysClaimed: 0,
     totalUsdGranted: 0,
-    sandboxBackup: createEmptyBucket(),
-    normalBackup: createEmptyBucket(),
+    sandboxBackup: createEmptyBucket(createdIso),
+    normalBackup: createEmptyBucket(createdIso),
   };
 }
 
@@ -109,14 +124,23 @@ export function useBrokerageEngine(
   const [optionPositions, setOptionPositions] = useState<OptionPosition[]>(
     savedPortfolio?.optionPositions ?? []
   );
+  const initialCreationIso =
+    savedPortfolio?.portfolioCreatedAtIso ||
+    savedPortfolio?.savedAtIso ||
+    new Date().toISOString();
+
+  const [portfolioCreatedAtIso, setPortfolioCreatedAtIso] = useState<string>(initialCreationIso);
   const [cashMxn, setCashMxn] = useState<number>(
     savedPortfolio?.cashMxn !== undefined ? savedPortfolio.cashMxn : 0
   );
   const [orders, setOrders] = useState<TradeOrder[]>(
     savedPortfolio?.orders ?? []
   );
+  const [weeklyTransfer, setWeeklyTransfer] = useState<WeeklyTransferState>(
+    savedPortfolio?.weeklyTransfer ?? createDefaultWeeklyTransferState()
+  );
   const [gameMode, setGameMode] = useState<GameModeState>(
-    savedPortfolio?.gameMode ?? createDefaultGameModeState()
+    savedPortfolio?.gameMode ?? createDefaultGameModeState(initialCreationIso)
   );
   const [news] = useState<NewsItem[]>(INITIAL_NEWS);
   const [isMarketLive, setIsMarketLive] = useState<boolean>(true);
@@ -249,6 +273,32 @@ export function useBrokerageEngine(
       : [0]
   );
 
+  const [equityTimeline, setEquityTimeline] = useState<EquityTimelinePoint[]>(() => {
+    if (savedPortfolio?.equityTimeline?.length) {
+      return savedPortfolio.equityTimeline;
+    }
+    const baseEq = savedPortfolio?.equityHistory?.[0] ?? 0;
+    return [
+      {
+        timestampIso: initialCreationIso,
+        equityMxn: Number((Number.isFinite(baseEq) ? baseEq : 0).toFixed(2)),
+        eventLabel: 'Creación del portafolio',
+      },
+    ];
+  });
+
+  const appendTimelinePoint = useCallback((equityMxn: number, eventLabel?: string) => {
+    const safeVal = Number((Number.isFinite(equityMxn) ? equityMxn : 0).toFixed(2));
+    setEquityTimeline((prev) => {
+      const nextPt: EquityTimelinePoint = {
+        timestampIso: new Date().toISOString(),
+        equityMxn: safeVal,
+        eventLabel,
+      };
+      return [...prev.slice(-119), nextPt];
+    });
+  }, []);
+
   const lastAlarmTickRef = useRef<Record<string, number>>({});
   const lastOfferSectorSentRef = useRef<string>('Tecnología');
 
@@ -278,17 +328,33 @@ export function useBrokerageEngine(
   const investedValueMxn = stocksInvestedMxn + optionsInvestedMxn;
   const totalPortfolioMxn = cashMxn + investedValueMxn;
 
-  const dailyOpenInvestedMxn = useMemo(() => {
+  const dailyOpenStocksMxn = useMemo(() => {
     return positions.reduce((acc, pos) => {
       const open = stockMap[pos.symbol]?.openPriceMxn ?? pos.avgEntryMxn;
       return acc + pos.shares * open;
     }, 0);
   }, [positions, stockMap]);
 
-  const dailyPnlMxn = investedValueMxn - dailyOpenInvestedMxn;
+  const optionsCostAndPnl = useMemo(() => {
+    return optionPositions.reduce(
+      (acc, pos) => {
+        const underlying = stockMap[pos.underlyingSymbol];
+        const spot = underlying?.priceMxn ?? pos.strikeMxn;
+        const valued = markOptionPositionToMarket(pos, spot, underlying?.volatilityAnnualPct);
+        acc.costBasis += pos.totalCostMxn + (pos.commissionPaidMxn || 0);
+        acc.pnl += valued.pnlMxn;
+        return acc;
+      },
+      { costBasis: 0, pnl: 0 }
+    );
+  }, [optionPositions, stockMap]);
+
+  const stocksDailyPnlMxn = stocksInvestedMxn - dailyOpenStocksMxn;
+  const dailyPnlMxn = Number((stocksDailyPnlMxn + optionsCostAndPnl.pnl).toFixed(2));
+  const dailyInvestedBaseMxn = dailyOpenStocksMxn + optionsCostAndPnl.costBasis;
   const dailyPnlPct =
-    totalPortfolioMxn > 0 && dailyOpenInvestedMxn > 0
-      ? (dailyPnlMxn / totalPortfolioMxn) * 100
+    dailyInvestedBaseMxn > 0 && Number.isFinite(dailyPnlMxn / dailyInvestedBaseMxn)
+      ? Number(((dailyPnlMxn / dailyInvestedBaseMxn) * 100).toFixed(2))
       : 0;
 
   // Portfolio VaR 99% estimate (weighted daily volatility * 2.326 * invested ratio, capped at 2.48% when guarded)
@@ -689,13 +755,33 @@ export function useBrokerageEngine(
           };
         }
 
-        const netProceeds = grossMxn - commissionMxn;
+        const soldFraction = Math.min(1, params.shares / Math.max(0.0001, existing.shares));
+        const proportionalEntryCommission = Number(
+          ((existing.commissionPaidMxn || 0) * soldFraction).toFixed(2)
+        );
+        const entryCostBasisMxn = Number(
+          (existing.avgEntryMxn * params.shares + proportionalEntryCommission).toFixed(2)
+        );
+        const netProceeds = Number((grossMxn - commissionMxn).toFixed(2));
+        const realizedPnlMxn = Number((netProceeds - entryCostBasisMxn).toFixed(2));
+        const rawRealizedPct =
+          entryCostBasisMxn > 0 ? (realizedPnlMxn / entryCostBasisMxn) * 100 : 0;
+        const realizedPnlPct = Number(
+          (Number.isFinite(rawRealizedPct) ? rawRealizedPct : 0).toFixed(2)
+        );
+
         setCashMxn((c) => Number((c + netProceeds).toFixed(2)));
         setPositions((prev) =>
           prev
             .map((p) =>
               p.symbol === asset.symbol
-                ? { ...p, shares: Number((p.shares - params.shares).toFixed(4)) }
+                ? {
+                    ...p,
+                    shares: Number((p.shares - params.shares).toFixed(4)),
+                    commissionPaidMxn: Number(
+                      Math.max(0, (p.commissionPaidMxn || 0) - proportionalEntryCommission).toFixed(2)
+                    ),
+                  }
                 : p
             )
             .filter((p) => p.shares > 0.0001)
@@ -705,6 +791,7 @@ export function useBrokerageEngine(
         const order: TradeOrder = {
           id: `ord-${Date.now()}`,
           symbol: asset.symbol,
+          instrumentType: 'STOCK',
           side: 'SELL',
           orderType: params.orderType,
           shares: params.shares,
@@ -721,11 +808,17 @@ export function useBrokerageEngine(
             second: '2-digit',
           }),
           executedAtIso: nowSell.toISOString(),
+          entryPriceMxn: existing.avgEntryMxn,
+          costBasisMxn: entryCostBasisMxn,
+          netProceedsMxn: netProceeds,
+          realizedPnlMxn,
+          realizedPnlPct,
         };
         setOrders((prev) => [order, ...prev]);
 
-        const msg = `Venta ejecutada: ${params.shares} ${asset.symbol} a $${execPrice.toLocaleString('es-MX')} MXN · Neto recibido: $${netProceeds.toLocaleString('es-MX')} MXN.`;
-        onToast(msg, 'success');
+        const sign = realizedPnlMxn >= 0 ? '+' : '';
+        const msg = `Venta ejecutada: ${params.shares} ${asset.symbol} a $${execPrice.toLocaleString('es-MX')} MXN · Rentabilidad: ${sign}$${realizedPnlMxn.toFixed(2)} MXN (${sign}${realizedPnlPct.toFixed(2)}%).`;
+        onToast(msg, realizedPnlMxn >= 0 ? 'success' : 'info');
         return { ok: true, message: msg };
       }
     },
@@ -874,6 +967,13 @@ export function useBrokerageEngine(
       const commissionMxn = Number((grossProceedsMxn * SMART_INVEST_COMMISSION_PCT).toFixed(2));
       const traditionalCommissionMxn = Number((grossProceedsMxn * TRADITIONAL_BROKER_FEE_PCT).toFixed(2));
       const netProceedsMxn = Number(Math.max(0, grossProceedsMxn - commissionMxn).toFixed(2));
+      const entryCostBasisMxn = Number((pos.totalCostMxn + (pos.commissionPaidMxn || 0)).toFixed(2));
+      const realizedPnlMxn = Number((netProceedsMxn - entryCostBasisMxn).toFixed(2));
+      const rawRealizedPct =
+        entryCostBasisMxn > 0 ? (realizedPnlMxn / entryCostBasisMxn) * 100 : 0;
+      const realizedPnlPct = Number(
+        (Number.isFinite(rawRealizedPct) ? rawRealizedPct : 0).toFixed(2)
+      );
 
       setCashMxn((c) => Number((c + netProceedsMxn).toFixed(2)));
       setOptionPositions((prev) => prev.filter((p) => p.id !== positionId));
@@ -902,14 +1002,19 @@ export function useBrokerageEngine(
           second: '2-digit',
         }),
         executedAtIso: now.toISOString(),
+        entryPriceMxn: pos.entryPremiumPerShareMxn,
+        costBasisMxn: entryCostBasisMxn,
+        netProceedsMxn,
+        realizedPnlMxn,
+        realizedPnlPct,
       };
       setOrders((prev) => [order, ...prev]);
 
-      const sign = valued.pnlMxn >= 0 ? '+' : '';
+      const sign = realizedPnlMxn >= 0 ? '+' : '';
       const msg = `Opción vendida: ${contractLabel} · Neto recibido $${netProceedsMxn.toLocaleString('es-MX', {
         minimumFractionDigits: 2,
-      })} MXN (${sign}$${valued.pnlMxn.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN / ${sign}${valued.pnlPct}%).`;
-      onToast(msg, valued.pnlMxn >= 0 ? 'success' : 'info');
+      })} MXN (Rentabilidad: ${sign}$${realizedPnlMxn.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN / ${sign}${realizedPnlPct.toFixed(2)}%).`;
+      onToast(msg, realizedPnlMxn >= 0 ? 'success' : 'info');
       return { ok: true, message: msg };
     },
     [optionPositions, stockMap, onToast]
@@ -1227,12 +1332,23 @@ export function useBrokerageEngine(
     return () => clearInterval(interval);
   }, [isMarketLive, isOnline, refreshYahooQuotes]);
 
-  // Keep equity chart synced smoothly with total portfolio value
+  // Keep equity chart and creation-based timeline synced smoothly with total portfolio value
   useEffect(() => {
     setEquityHistory((prev) => {
       const last = prev[prev.length - 1];
       if (Math.abs(last - totalPortfolioMxn) < 1) return prev;
       return [...prev.slice(-29), Number(totalPortfolioMxn.toFixed(2))];
+    });
+    setEquityTimeline((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && Math.abs(last.equityMxn - totalPortfolioMxn) < 1) return prev;
+      return [
+        ...prev.slice(-119),
+        {
+          timestampIso: new Date().toISOString(),
+          equityMxn: Number(totalPortfolioMxn.toFixed(2)),
+        },
+      ];
     });
   }, [totalPortfolioMxn]);
 
@@ -1305,6 +1421,114 @@ export function useBrokerageEngine(
     );
   }, [gameMode.enabled, gameMode.lastGrantDate, effectiveUsdMxnRate, onToast]);
 
+  // Weekly $10,000 MXN transfer availability (enforces 7-day cooldown on normal portfolio)
+  const activeWeeklyTransfer = gameMode.enabled
+    ? gameMode.normalBackup.weeklyTransfer ?? weeklyTransfer
+    : weeklyTransfer;
+
+  const { canTransferWeekly10k, nextWeeklyTransferAtIso, daysUntilNextWeeklyTransfer } = useMemo(() => {
+    if (!activeWeeklyTransfer.lastTransferIso) {
+      return {
+        canTransferWeekly10k: true,
+        nextWeeklyTransferAtIso: null as string | null,
+        daysUntilNextWeeklyTransfer: 0,
+      };
+    }
+    const lastMs = new Date(activeWeeklyTransfer.lastTransferIso).getTime();
+    if (!Number.isFinite(lastMs)) {
+      return {
+        canTransferWeekly10k: true,
+        nextWeeklyTransferAtIso: null as string | null,
+        daysUntilNextWeeklyTransfer: 0,
+      };
+    }
+    const nextMs = lastMs + WEEKLY_COOLDOWN_MS;
+    const remainingMs = nextMs - Date.now();
+    if (remainingMs <= 0) {
+      return {
+        canTransferWeekly10k: true,
+        nextWeeklyTransferAtIso: null as string | null,
+        daysUntilNextWeeklyTransfer: 0,
+      };
+    }
+    return {
+      canTransferWeekly10k: false,
+      nextWeeklyTransferAtIso: new Date(nextMs).toISOString(),
+      daysUntilNextWeeklyTransfer: Math.ceil(remainingMs / (1000 * 60 * 60 * 24)),
+    };
+  }, [activeWeeklyTransfer.lastTransferIso]);
+
+  const transferWeekly10k = useCallback(() => {
+    const nowIso = new Date().toISOString();
+    if (!canTransferWeekly10k) {
+      onToast(
+        `Ya realizaste tu transferencia semanal de $10,000 MXN. Podrás transferir de nuevo en ${daysUntilNextWeeklyTransfer} ${
+          daysUntilNextWeeklyTransfer === 1 ? 'día' : 'días'
+        }.`,
+        'info'
+      );
+      return;
+    }
+
+    if (gameMode.enabled) {
+      // Credit the normal portfolio backup so weekly MXN transfers never mix with Modo Juego USD
+      const prevNormal = gameMode.normalBackup || createEmptyBucket(portfolioCreatedAtIso);
+      const nextNormalCash = Number((prevNormal.cashMxn + WEEKLY_TRANSFER_AMOUNT_MXN).toFixed(2));
+      const nextNormalTransfer: WeeklyTransferState = {
+        lastTransferIso: nowIso,
+        transfersCount: (prevNormal.weeklyTransfer?.transfersCount ?? 0) + 1,
+        totalTransferredMxn:
+          (prevNormal.weeklyTransfer?.totalTransferredMxn ?? 0) + WEEKLY_TRANSFER_AMOUNT_MXN,
+      };
+      setGameMode((prev) => ({
+        ...prev,
+        normalBackup: {
+          ...prevNormal,
+          cashMxn: nextNormalCash,
+          equityHistory: [...prevNormal.equityHistory.slice(-29), nextNormalCash],
+          equityTimeline: [
+            ...(prevNormal.equityTimeline ?? []).slice(-119),
+            {
+              timestampIso: nowIso,
+              equityMxn: nextNormalCash,
+              eventLabel: 'Transferencia semanal +$10,000 MXN',
+            },
+          ],
+          weeklyTransfer: nextNormalTransfer,
+        },
+      }));
+      onToast(
+        `Transferencia semanal exitosa: +$10,000.00 MXN acreditados a tu Portafolio Real (sal de Modo Juego para operarlos).`,
+        'success'
+      );
+      return;
+    }
+
+    const nextCash = Number((cashMxn + WEEKLY_TRANSFER_AMOUNT_MXN).toFixed(2));
+    const nextTotal = Number((totalPortfolioMxn + WEEKLY_TRANSFER_AMOUNT_MXN).toFixed(2));
+    setCashMxn(nextCash);
+    setWeeklyTransfer((prev) => ({
+      lastTransferIso: nowIso,
+      transfersCount: prev.transfersCount + 1,
+      totalTransferredMxn: prev.totalTransferredMxn + WEEKLY_TRANSFER_AMOUNT_MXN,
+    }));
+    appendTimelinePoint(nextTotal, 'Transferencia semanal +$10,000 MXN');
+    onToast(
+      `Transferencia semanal exitosa: +$10,000.00 MXN acreditados a tu portafolio. Próxima transferencia disponible en 7 días.`,
+      'success'
+    );
+  }, [
+    canTransferWeekly10k,
+    daysUntilNextWeeklyTransfer,
+    gameMode.enabled,
+    gameMode.normalBackup,
+    portfolioCreatedAtIso,
+    cashMxn,
+    totalPortfolioMxn,
+    appendTimelinePoint,
+    onToast,
+  ]);
+
   const toggleGameMode = useCallback(() => {
     const today = getTodayLocalDateKey();
     const rate = usdMxnRate && usdMxnRate > 0 ? usdMxnRate : FALLBACK_USD_MXN_RATE;
@@ -1316,12 +1540,15 @@ export function useBrokerageEngine(
       optionPositions,
       orders,
       equityHistory,
+      portfolioCreatedAtIso,
+      equityTimeline,
+      weeklyTransfer,
     };
 
     if (!gameMode.enabled) {
       // Entering Modo Juego: save normal account snapshot, load sandbox, and grant today's $10,000 USD if not yet claimed
       const shouldGrantToday = gameMode.lastGrantDate !== today;
-      const sandbox = gameMode.sandboxBackup || createEmptyBucket();
+      const sandbox = gameMode.sandboxBackup || createEmptyBucket(portfolioCreatedAtIso);
       const nextCash = Number((sandbox.cashMxn + (shouldGrantToday ? grantMxn : 0)).toFixed(2));
       const nextHistory =
         shouldGrantToday && sandbox.equityHistory.length <= 1 && sandbox.equityHistory[0] === 0
@@ -1329,12 +1556,26 @@ export function useBrokerageEngine(
           : sandbox.equityHistory.length
           ? sandbox.equityHistory
           : [nextCash];
+      const sandboxCreated = sandbox.portfolioCreatedAtIso || new Date().toISOString();
+      const nextTimeline =
+        sandbox.equityTimeline && sandbox.equityTimeline.length > 0
+          ? [...sandbox.equityTimeline]
+          : [{ timestampIso: sandboxCreated, equityMxn: 0, eventLabel: 'Inicio Modo Juego ($0)' }];
+      if (shouldGrantToday) {
+        nextTimeline.push({
+          timestampIso: new Date().toISOString(),
+          equityMxn: nextCash,
+          eventLabel: 'Bono diario Modo Juego +$10,000 USD',
+        });
+      }
 
       setCashMxn(nextCash);
       setPositions(sandbox.positions);
       setOptionPositions(sandbox.optionPositions);
       setOrders(sandbox.orders);
       setEquityHistory(nextHistory);
+      setPortfolioCreatedAtIso(sandboxCreated);
+      setEquityTimeline(nextTimeline);
       setGameMode((prev) => ({
         ...prev,
         enabled: true,
@@ -1361,12 +1602,22 @@ export function useBrokerageEngine(
       }
     } else {
       // Returning to normal account: preserve sandbox progress and restore normal account
-      const normal = gameMode.normalBackup || createEmptyBucket();
+      const normal = gameMode.normalBackup || createEmptyBucket(portfolioCreatedAtIso);
+      const normalCreated = normal.portfolioCreatedAtIso || portfolioCreatedAtIso;
       setCashMxn(normal.cashMxn);
       setPositions(normal.positions);
       setOptionPositions(normal.optionPositions);
       setOrders(normal.orders);
       setEquityHistory(normal.equityHistory.length ? normal.equityHistory : [0]);
+      setPortfolioCreatedAtIso(normalCreated);
+      setEquityTimeline(
+        normal.equityTimeline && normal.equityTimeline.length > 0
+          ? normal.equityTimeline
+          : [{ timestampIso: normalCreated, equityMxn: normal.cashMxn, eventLabel: 'Portafolio Real' }]
+      );
+      if (normal.weeklyTransfer) {
+        setWeeklyTransfer(normal.weeklyTransfer);
+      }
       setGameMode((prev) => ({
         ...prev,
         enabled: false,
@@ -1379,7 +1630,19 @@ export function useBrokerageEngine(
         'info'
       );
     }
-  }, [gameMode, cashMxn, positions, optionPositions, orders, equityHistory, usdMxnRate, onToast]);
+  }, [
+    gameMode,
+    cashMxn,
+    positions,
+    optionPositions,
+    orders,
+    equityHistory,
+    portfolioCreatedAtIso,
+    equityTimeline,
+    weeklyTransfer,
+    usdMxnRate,
+    onToast,
+  ]);
 
   const claimDailyGameBonus = useCallback(() => {
     if (!gameMode.enabled) {
@@ -1403,13 +1666,22 @@ export function useBrokerageEngine(
       daysClaimed: prev.daysClaimed + 1,
       totalUsdGranted: prev.totalUsdGranted + GAME_MODE_DAILY_USD,
     }));
+    appendTimelinePoint(totalPortfolioMxn + grantMxn, 'Bono diario Modo Juego +$10,000 USD');
     onToast(
       `+$10,000 USD acreditados ($${grantMxn.toLocaleString('es-MX', {
         minimumFractionDigits: 2,
       })} MXN) en Modo Juego.`,
       'success'
     );
-  }, [gameMode.enabled, gameMode.lastGrantDate, usdMxnRate, toggleGameMode, onToast]);
+  }, [
+    gameMode.enabled,
+    gameMode.lastGrantDate,
+    usdMxnRate,
+    totalPortfolioMxn,
+    toggleGameMode,
+    appendTimelinePoint,
+    onToast,
+  ]);
 
   const savePortfolioSnapshotNow = useCallback(() => {
     const {
@@ -1418,11 +1690,14 @@ export function useBrokerageEngine(
       ...profileSettings
     } = profile;
     const savedAt = savePersistedPortfolio(userUid, {
+      portfolioCreatedAtIso,
       cashMxn,
       positions,
       optionPositions,
       orders,
       equityHistory,
+      equityTimeline,
+      weeklyTransfer,
       stocks,
       viewCounts,
       sectorScores,
@@ -1438,11 +1713,14 @@ export function useBrokerageEngine(
     return savedAt;
   }, [
     userUid,
+    portfolioCreatedAtIso,
     cashMxn,
     positions,
     optionPositions,
     orders,
     equityHistory,
+    equityTimeline,
+    weeklyTransfer,
     stocks,
     viewCounts,
     sectorScores,
@@ -1462,6 +1740,7 @@ export function useBrokerageEngine(
   }, [savePortfolioSnapshotNow]);
 
   const resetPortfolioToDefault = useCallback(() => {
+    const nowIso = new Date().toISOString();
     clearPersistedPortfolio(userUid);
     setStocks(INITIAL_STOCKS);
     setPositions([]);
@@ -1469,8 +1748,13 @@ export function useBrokerageEngine(
     setCashMxn(0);
     setOrders([]);
     setAlarms([]);
+    setPortfolioCreatedAtIso(nowIso);
     setEquityHistory([0]);
-    setGameMode(createDefaultGameModeState());
+    setEquityTimeline([
+      { timestampIso: nowIso, equityMxn: 0, eventLabel: 'Creación del portafolio ($0)' },
+    ]);
+    setWeeklyTransfer(createDefaultWeeklyTransferState());
+    setGameMode(createDefaultGameModeState(nowIso));
     setLastSavedAt(null);
     onToast('Portafolio restablecido a $0.00 MXN iniciales.', 'info');
   }, [userUid, onToast]);
@@ -1493,6 +1777,13 @@ export function useBrokerageEngine(
     emails,
     alarms,
     equityHistory,
+    portfolioCreatedAtIso,
+    equityTimeline,
+    weeklyTransfer: activeWeeklyTransfer,
+    canTransferWeekly10k,
+    nextWeeklyTransferAtIso,
+    daysUntilNextWeeklyTransfer,
+    transferWeekly10k,
     isMarketLive,
     setIsMarketLive,
     quotesLoading,

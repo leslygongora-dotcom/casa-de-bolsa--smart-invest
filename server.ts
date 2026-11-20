@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,11 +30,35 @@ const PORT =
         ? envPort
         : defaultDevPort;
 
+const sanitizeErrorDetail = (err: unknown): string => {
+  const raw =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'object' && err !== null && 'message' in err
+      ? String((err as { message?: unknown }).message || err)
+      : String(err || 'Error desconocido');
+  return raw.replace(/key=[^&\s"']+/gi, 'key=***').slice(0, 320);
+};
+
 const getAiClient = () => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') return null;
   return new GoogleGenAI({
     apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+};
+
+const getLiveAiClient = () => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') return null;
+  return new GoogleGenAI({
+    apiKey,
+    apiVersion: 'v1beta',
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -251,7 +276,7 @@ async function createServer() {
   const botWss = new WebSocketServer({ noServer: true });
 
   wss.on('connection', async (clientWs: WebSocket) => {
-    const ai = getAiClient();
+    const ai = getLiveAiClient();
     if (!ai) {
       clientWs.send(
         JSON.stringify({
@@ -264,6 +289,35 @@ async function createServer() {
     }
 
     let liveSession: Awaited<ReturnType<typeof ai.live.connect>> | null = null;
+    let clientClosedEarly = false;
+
+    clientWs.on('message', (raw) => {
+      if (!liveSession) return;
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.audio) {
+          liveSession.sendRealtimeInput({
+            audio: { data: msg.audio, mimeType: 'audio/pcm;rate=16000' },
+          });
+        } else if (msg.text) {
+          liveSession.sendRealtimeInput({
+            text: String(msg.text),
+          });
+        }
+      } catch {
+        // Ignore malformed client frames
+      }
+    });
+
+    clientWs.on('close', () => {
+      clientClosedEarly = true;
+      try {
+        liveSession?.close();
+      } catch {
+        // Ignore close errors
+      }
+    });
+
     try {
       liveSession = await ai.live.connect({
         model: 'gemini-3.8-live',
@@ -279,9 +333,7 @@ async function createServer() {
         },
         callbacks: {
           onopen: () => {
-            if (clientWs.readyState === WebSocket.OPEN) {
-              clientWs.send(JSON.stringify({ ready: true }));
-            }
+            // Underlying WS opened; wait for connect() promise (setupComplete) before notifying client ready
           },
           onmessage: (message: LiveServerMessage) => {
             if (clientWs.readyState !== WebSocket.OPEN) return;
@@ -305,60 +357,57 @@ async function createServer() {
             }
           },
           onerror: (err: unknown) => {
-            console.error('Gemini Live error:', err);
+            const detail = sanitizeErrorDetail(err);
+            console.error('Gemini Live error:', detail);
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(
                 JSON.stringify({
-                  error: 'Ocurrió un problema con la sesión de voz en tiempo real.',
+                  error: `Ocurrió un problema con la sesión de voz en tiempo real: ${detail}`,
+                  detail,
                 })
               );
             }
           },
-          onclose: () => {
+          onclose: (closeEv: unknown) => {
+            const closeReason =
+              typeof closeEv === 'object' && closeEv !== null && 'reason' in closeEv
+                ? String((closeEv as { reason?: unknown }).reason || '')
+                : '';
+            const closeCode =
+              typeof closeEv === 'object' && closeEv !== null && 'code' in closeEv
+                ? Number((closeEv as { code?: unknown }).code || 0)
+                : 0;
             if (clientWs.readyState === WebSocket.OPEN) {
-              clientWs.send(JSON.stringify({ closed: true }));
+              clientWs.send(JSON.stringify({ closed: true, code: closeCode, reason: closeReason }));
             }
           },
         },
       });
+
+      if (clientClosedEarly || clientWs.readyState !== WebSocket.OPEN) {
+        try {
+          liveSession.close();
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      clientWs.send(JSON.stringify({ ready: true }));
     } catch (err) {
-      console.error('Failed to connect Gemini Live:', err);
+      const detail = sanitizeErrorDetail(err);
+      console.error('Failed to connect Gemini Live:', detail);
       if (clientWs.readyState === WebSocket.OPEN) {
         clientWs.send(
           JSON.stringify({
-            error: 'No se pudo iniciar la conversación por voz con gemini-3.8-live.',
+            error: `No se pudo iniciar la conversación por voz con gemini-3.8-live (${detail}).`,
+            detail,
           })
         );
         clientWs.close();
       }
       return;
     }
-
-    clientWs.on('message', (raw) => {
-      if (!liveSession) return;
-      try {
-        const msg = JSON.parse(raw.toString());
-        if (msg.audio) {
-          liveSession.sendRealtimeInput({
-            audio: { data: msg.audio, mimeType: 'audio/pcm;rate=16000' },
-          });
-        } else if (msg.text) {
-          liveSession.sendRealtimeInput({
-            text: String(msg.text),
-          });
-        }
-      } catch {
-        // Ignore malformed client frames
-      }
-    });
-
-    clientWs.on('close', () => {
-      try {
-        liveSession?.close();
-      } catch {
-        // Ignore close errors
-      }
-    });
   });
 
   // 1. Glosario / Burbujas Explicativas
@@ -517,11 +566,13 @@ async function createServer() {
         modelUsed: useSearch ? `${modelName} + Google Search` : modelName,
       });
     } catch (err) {
-      console.error('Multi-turn chat error:', err);
-      res.json({
-        reply: `En nivel ${level}: recuerda proteger siempre tu capital primero. Con comisiones de 0.10% y nuestro escudo VaR del 2.5%, puedes invertir poco a poco mientras aprendes cómo se comportan tus sectores favoritos.`,
+      const detail = sanitizeErrorDetail(err);
+      console.error('Multi-turn chat error:', detail);
+      res.status(502).json({
+        reply: `No se pudo conectar con Gemini (${detail}). Verifica tu clave GEMINI_API_KEY en Settings → Secrets.`,
         sources: [],
-        modelUsed: `${modelName} (respaldo)`,
+        modelUsed: `${modelName} (error)`,
+        error: detail,
       });
     }
   });
@@ -1298,6 +1349,18 @@ async function createServer() {
   });
 
   // 8. API y WebSocket Gateway para Bot de Trading en Python + Clasificación de Nuevos Usuarios + Telegram
+  let firebaseApiKey = '';
+  try {
+    const fbCfg = JSON.parse(
+      fs.readFileSync(path.join(__dirname, 'firebase-applet-config.json'), 'utf8')
+    ) as { apiKey?: string };
+    firebaseApiKey = String(fbCfg.apiKey || '').trim();
+  } catch {
+    firebaseApiKey = '';
+  }
+
+  const verifiedFirebaseTokens = new Map<string, number>();
+
   function isBotAuthorized(req: Request): boolean {
     const expected = (process.env.BOT_API_SECRET || '').trim();
     if (!expected) return true;
@@ -1305,6 +1368,36 @@ async function createServer() {
     const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
     const queryToken = String(req.query.token || '').trim();
     return bearer === expected || queryToken === expected;
+  }
+
+  async function isBotOrFirebaseAuthorized(req: Request): Promise<boolean> {
+    if (isBotAuthorized(req)) return true;
+    const fbToken = String(req.headers['x-firebase-token'] || '').trim();
+    if (!fbToken || !firebaseApiKey) return false;
+    const now = Date.now();
+    const cachedExp = verifiedFirebaseTokens.get(fbToken);
+    if (cachedExp && cachedExp > now) return true;
+    try {
+      const resp = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(firebaseApiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken: fbToken }),
+          signal: AbortSignal.timeout(4000),
+        }
+      );
+      if (!resp.ok) return false;
+      const data = (await resp.json()) as { users?: Array<{ localId?: string }> };
+      if (Array.isArray(data.users) && data.users.length > 0) {
+        verifiedFirebaseTokens.set(fbToken, now + 5 * 60 * 1000);
+        if (verifiedFirebaseTokens.size > 200) verifiedFirebaseTokens.clear();
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   function classifyNewUserServerSide(rawAnswers: number[], meta?: { userId?: string; telegramUsername?: string }) {
@@ -1387,30 +1480,532 @@ async function createServer() {
     };
   }
 
-  function getTelegramPublicConfig() {
-    const botUsername = (process.env.TELEGRAM_BOT_USERNAME || '').trim().replace(/^@/, '');
-    const botId = (process.env.TELEGRAM_BOT_ID || '').trim();
-    const isTokenConfigured = Boolean((process.env.TELEGRAM_BOT_TOKEN || '').trim());
+  interface TelegramLiveStatusCache {
+    fetchedAt: number;
+    botUsername: string | null;
+    botId: string | null;
+    botFirstName: string | null;
+    webhookUrl: string | null;
+    webhookConnected: boolean;
+    pendingUpdateCount: number;
+    lastErrorMessage: string | null;
+  }
+
+  let telegramCache: TelegramLiveStatusCache | null = null;
+  type TelegramPollingState = 'inactive' | 'active' | 'paused_by_user' | 'yielded_to_external_python' | 'webhook_mode';
+  let telegramPollingState: TelegramPollingState = 'inactive';
+  let telegramPollingWanted = Boolean((process.env.TELEGRAM_BOT_TOKEN || '').trim());
+  let telegramPollingRunning = false;
+  let telegramPollingAbort: AbortController | null = null;
+  let telegramPollOffset = 0;
+  let telegramProcessedFirstBatch = false;
+
+  async function registerTelegramMenuCommands(botToken: string) {
+    await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands: [
+          { command: 'start', description: 'Bienvenida y menú de Smart Invest' },
+          { command: 'clasificar', description: 'Clasificar perfil: /clasificar 3,3,4,3,3,4,3,4' },
+          { command: 'mercado', description: 'Precio real Yahoo Finance: /mercado NVDA' },
+          { command: 'avanzado', description: 'Rutas WebSocket y API para bot Python' },
+          { command: 'servidor', description: 'Estado del servidor y comisión 0.10%' },
+        ],
+      }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => undefined);
+  }
+
+  async function buildTelegramReplyText(username: string, text: string): Promise<string> {
+    const cmd = text.split(/\s+/)[0].toLowerCase().split('@')[0];
+
+    if (cmd === '/start') {
+      return (
+        `Hola ${username}, bienvenido al bot cuantitativo de Smart Invest.\n\n` +
+        `Comandos disponibles:\n` +
+        `• /clasificar 3,3,4,3,3,4,3,4 — Clasifica tu perfil (8 respuestas de 1 a 4) para conectar a tu servidor\n` +
+        `• /mercado NVDA — Precio real de Yahoo Finance en MXN/USD\n` +
+        `• /avanzado — Requisitos y rutas para conectar tu bot en Python\n` +
+        `• /servidor — Estado del servidor y WebSocket /ws/trading-bot`
+      );
+    }
+    if (cmd === '/clasificar') {
+      const nums = text
+        .replace(/^\/clasificar(?:@\S+)?/i, '')
+        .split(/[\s,;]+/)
+        .map(Number)
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 4);
+
+      if (nums.length !== 8) {
+        return (
+          'Para clasificarte envía exactamente 8 números del 1 al 4 separados por coma.\n' +
+          'Ejemplo para perfil avanzado: /clasificar 3,3,4,3,3,4,3,4\n' +
+          'Ejemplo principiante: /clasificar 1,1,2,1,2,1,1,2'
+        );
+      }
+      const result = classifyNewUserServerSide(nums, { telegramUsername: username });
+      return (
+        `Clasificación completada para @${username}:\n` +
+        `• Perfil definitivo: ${result.definitiveProfile.toUpperCase()} (${result.totalScore}/32 pts)\n` +
+        `• Nivel de experiencia: ${result.experienceTier.toUpperCase()}\n` +
+        `• Acceso a Bot Avanzado: ${result.eligibleForAdvancedBot ? 'AUTORIZADO' : 'RESTRINGIDO (usa Modo Juego en web primero)'}\n` +
+        `• Ruta recomendada: ${result.serverAccess.recommendedChannel}\n` +
+        (result.eligibleForAdvancedBot
+          ? `• WebSocket Python: /ws/trading-bot | REST: /api/bot/v1/market`
+          : `• Te recomendamos practicar primero en Modo Juego ($10,000 USD/día) en la app web.`)
+      );
+    }
+    if (cmd === '/mercado') {
+      const sym = (text.split(/\s+/)[1] || 'SPY').toUpperCase();
+      const snapshot = await buildLiveQuotesSnapshot();
+      const q = snapshot.quotes[sym];
+      return q
+        ? `${q.symbol} (${q.yahooTicker})\n• Precio: $${q.priceMxn.toLocaleString('es-MX')} MXN ($${q.priceOriginal} ${q.originalCurrency})\n• Cambio día: ${q.changePct >= 0 ? '+' : ''}${q.changePct}%\n• Volatilidad anual: ${q.volatilityAnnualPct}%`
+        : `Símbolo ${sym} no encontrado. Prueba con: SPY, AAPL, NVDA, MSFT, AMZN, LLY, XOM, WALMEX, GFNORTE, XRP_USDT.`;
+    }
+    if (cmd === '/avanzado' || cmd === '/servidor') {
+      const appUrl = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+      const wsUrl = appUrl.replace(/^http/, 'ws') + '/ws/trading-bot';
+      return (
+        `Smart Invest · Servidor para Usuarios Avanzados (Bot Python)\n` +
+        `• REST API: ${appUrl}/api/bot/v1/market\n` +
+        `• Clasificador: ${appUrl}/api/bot/v1/classify-user\n` +
+        `• WebSocket Live: ${wsUrl}\n` +
+        `• Comisión: 0.10% | Tope VaR 99%: 2.50%`
+      );
+    }
+    return (
+      'Este bot está conectado a Smart Invest.\n' +
+      'Comandos activos:\n' +
+      '• /start — Menú principal\n' +
+      '• /mercado NVDA — Cotización real Yahoo Finance\n' +
+      '• /clasificar 3,3,4,3,3,4,3,4 — Evaluar acceso al servidor avanzado\n' +
+      '• /avanzado — Rutas WebSocket y API para bot Python'
+    );
+  }
+
+  async function sendTelegramReply(botToken: string, chatId: number | string, text: string): Promise<boolean> {
+    try {
+      const tgResp = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text }),
+        signal: AbortSignal.timeout(6000),
+      });
+      return tgResp.ok;
+    } catch (err) {
+      console.error('Telegram sendMessage failed:', err);
+      return false;
+    }
+  }
+
+  function stopTelegramPolling(nextState: TelegramPollingState = 'paused_by_user') {
+    telegramPollingWanted = false;
+    telegramPollingState = nextState;
+    try {
+      telegramPollingAbort?.abort();
+    } catch {
+      // ignore
+    }
+    telegramPollingAbort = null;
+  }
+
+  async function runTelegramPollingLoop() {
+    if (telegramPollingRunning) return;
+    const botToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+    if (!botToken) {
+      telegramPollingState = 'inactive';
+      return;
+    }
+
+    telegramPollingRunning = true;
+    telegramPollingState = 'active';
+    void registerTelegramMenuCommands(botToken);
+
+    try {
+      while (telegramPollingWanted && (process.env.TELEGRAM_BOT_TOKEN || '').trim()) {
+        const controller = new AbortController();
+        telegramPollingAbort = controller;
+        try {
+          const timeoutSec = telegramProcessedFirstBatch ? 20 : 0;
+          const url = `https://api.telegram.org/bot${botToken}/getUpdates?offset=${telegramPollOffset}&timeout=${timeoutSec}&allowed_updates=${encodeURIComponent('["message"]')}`;
+          const resp = await fetch(url, { signal: controller.signal });
+
+          if (resp.status === 409) {
+            // Another script (e.g. local Python bot) is polling this token or a webhook is active
+            const errJson = (await resp.json().catch(() => ({}))) as { description?: string };
+            if (String(errJson.description || '').toLowerCase().includes('webhook')) {
+              telegramPollingState = 'webhook_mode';
+            } else {
+              telegramPollingState = 'yielded_to_external_python';
+            }
+            telegramPollingWanted = false;
+            break;
+          }
+
+          if (!resp.ok) {
+            await new Promise((r) => setTimeout(r, 3000));
+            continue;
+          }
+
+          const payload = (await resp.json()) as {
+            ok?: boolean;
+            result?: Array<{
+              update_id: number;
+              message?: {
+                chat?: { id?: number };
+                from?: { username?: string; first_name?: string };
+                text?: string;
+              };
+            }>;
+          };
+
+          const updates = Array.isArray(payload.result) ? payload.result : [];
+          if (updates.length > 0) {
+            telegramPollOffset = updates[updates.length - 1].update_id + 1;
+
+            if (!telegramProcessedFirstBatch && updates.length > 2) {
+              // Avoid spamming 11 queued replies at once: answer the latest slash command + latest /mercado if present
+              const byChat = new Map<number, { username: string; texts: string[] }>();
+              for (const u of updates) {
+                const cid = u.message?.chat?.id;
+                const txt = String(u.message?.text || '').trim();
+                if (!cid || !txt) continue;
+                const uname = u.message?.from?.username || u.message?.from?.first_name || 'Inversionista';
+                const entry = byChat.get(cid) || { username: uname, texts: [] };
+                entry.username = uname;
+                entry.texts.push(txt);
+                byChat.set(cid, entry);
+              }
+              for (const [cid, entry] of byChat.entries()) {
+                const lastMercado = [...entry.texts].reverse().find((t) => t.toLowerCase().startsWith('/mercado'));
+                const lastCmd = entry.texts[entry.texts.length - 1];
+                if (lastMercado && lastMercado !== lastCmd) {
+                  const r1 = await buildTelegramReplyText(entry.username, lastMercado);
+                  await sendTelegramReply(botToken, cid, r1);
+                }
+                const r2 = await buildTelegramReplyText(entry.username, lastCmd);
+                await sendTelegramReply(botToken, cid, r2);
+              }
+            } else {
+              for (const u of updates) {
+                const cid = u.message?.chat?.id;
+                const txt = String(u.message?.text || '').trim();
+                if (!cid || !txt) continue;
+                const uname = u.message?.from?.username || u.message?.from?.first_name || 'Inversionista';
+                const reply = await buildTelegramReplyText(uname, txt);
+                await sendTelegramReply(botToken, cid, reply);
+              }
+            }
+          }
+          telegramProcessedFirstBatch = true;
+        } catch (err) {
+          const isAbort = err instanceof Error && err.name === 'AbortError';
+          if (isAbort || !telegramPollingWanted) break;
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    } finally {
+      telegramPollingRunning = false;
+      telegramPollingAbort = null;
+      if (telegramPollingState === 'active' && !telegramPollingWanted) {
+        telegramPollingState = 'paused_by_user';
+      }
+    }
+  }
+
+  async function initTelegramTransportOnStartup() {
+    const botToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+    if (!botToken) return;
+    try {
+      const whResp = await fetch(`https://api.telegram.org/bot${botToken}/getWebhookInfo`, {
+        signal: AbortSignal.timeout(4500),
+      });
+      if (whResp.ok) {
+        const whJson = (await whResp.json()) as {
+          ok?: boolean;
+          result?: { url?: string; last_error_message?: string };
+        };
+        const currentUrl = whJson.result?.url || '';
+        const lastErr = whJson.result?.last_error_message || '';
+        const isBrokenDevWebhook =
+          currentUrl.includes('ais-dev-') ||
+          lastErr.includes('302') ||
+          lastErr.includes('Wrong response');
+
+        if (isBrokenDevWebhook && currentUrl) {
+          await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ drop_pending_updates: false }),
+            signal: AbortSignal.timeout(4500),
+          }).catch(() => undefined);
+        } else if (currentUrl) {
+          // A valid public webhook is already configured
+          telegramPollingWanted = false;
+          telegramPollingState = 'webhook_mode';
+          return;
+        }
+      }
+    } catch {
+      // Proceed to start polling
+    }
+    if (telegramPollingWanted) {
+      void runTelegramPollingLoop();
+    }
+  }
+
+  void initTelegramTransportOnStartup();
+
+  async function getTelegramPublicConfig(forceRefresh = false) {
+    const envUsername = (process.env.TELEGRAM_BOT_USERNAME || '').trim().replace(/^@/, '');
+    const envBotId = (process.env.TELEGRAM_BOT_ID || '').trim();
+    const botToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+    const isTokenConfigured = Boolean(botToken);
+
+    if (!isTokenConfigured) {
+      return {
+        botUsername: envUsername || null,
+        botId: envBotId || null,
+        botFirstName: null as string | null,
+        telegramUrl: envUsername ? `https://t.me/${envUsername}` : null,
+        webhookPath: '/api/telegram/webhook',
+        isTokenConfigured: false,
+        webhookUrl: null as string | null,
+        webhookConnected: false,
+        pollingActive: false,
+        pollingState: 'inactive' as TelegramPollingState,
+        pendingUpdateCount: 0,
+        lastErrorMessage: null as string | null,
+        commands: ['/start', '/clasificar', '/avanzado', '/mercado', '/servidor'],
+      };
+    }
+
+    const now = Date.now();
+    if (forceRefresh || !telegramCache || now - telegramCache.fetchedAt > 30000) {
+      let botUsername: string | null = envUsername || null;
+      let botId: string | null = envBotId || null;
+      let botFirstName: string | null = null;
+      let webhookUrl: string | null = null;
+      let webhookConnected = false;
+      let pendingUpdateCount = 0;
+      let lastErrorMessage: string | null = null;
+
+      try {
+        const [meResp, whResp] = await Promise.all([
+          fetch(`https://api.telegram.org/bot${botToken}/getMe`, { signal: AbortSignal.timeout(4500) }),
+          fetch(`https://api.telegram.org/bot${botToken}/getWebhookInfo`, { signal: AbortSignal.timeout(4500) }),
+        ]);
+
+        if (meResp.ok) {
+          const meJson = (await meResp.json()) as {
+            ok?: boolean;
+            result?: { id?: number; username?: string; first_name?: string };
+          };
+          if (meJson.ok && meJson.result) {
+            if (meJson.result.username) botUsername = meJson.result.username.replace(/^@/, '');
+            if (meJson.result.id) botId = String(meJson.result.id);
+            if (meJson.result.first_name) botFirstName = meJson.result.first_name;
+          }
+        }
+
+        if (whResp.ok) {
+          const whJson = (await whResp.json()) as {
+            ok?: boolean;
+            result?: {
+              url?: string;
+              pending_update_count?: number;
+              last_error_message?: string;
+            };
+          };
+          if (whJson.ok && whJson.result) {
+            webhookUrl = whJson.result.url || null;
+            webhookConnected = Boolean(webhookUrl && webhookUrl.includes('/api/telegram/webhook'));
+            pendingUpdateCount = Number(whJson.result.pending_update_count || 0);
+            lastErrorMessage = whJson.result.last_error_message || null;
+          }
+        }
+      } catch {
+        // Fallback to env-only metadata if Telegram API is temporarily unreachable
+      }
+
+      telegramCache = {
+        fetchedAt: now,
+        botUsername,
+        botId,
+        botFirstName,
+        webhookUrl,
+        webhookConnected,
+        pendingUpdateCount,
+        lastErrorMessage,
+      };
+    }
+
+    const resolvedUsername = telegramCache.botUsername || envUsername || null;
     return {
-      botUsername: botUsername || null,
-      botId: botId || null,
-      telegramUrl: botUsername ? `https://t.me/${botUsername}` : null,
+      botUsername: resolvedUsername,
+      botId: telegramCache.botId || envBotId || null,
+      botFirstName: telegramCache.botFirstName,
+      telegramUrl: resolvedUsername ? `https://t.me/${resolvedUsername}` : null,
       webhookPath: '/api/telegram/webhook',
-      isTokenConfigured,
+      isTokenConfigured: true,
+      webhookUrl: telegramCache.webhookUrl,
+      webhookConnected: telegramCache.webhookConnected,
+      pollingActive: telegramPollingState === 'active' && telegramPollingRunning,
+      pollingState: telegramPollingState,
+      pendingUpdateCount: telegramCache.pendingUpdateCount,
+      lastErrorMessage: telegramCache.lastErrorMessage,
       commands: ['/start', '/clasificar', '/avanzado', '/mercado', '/servidor'],
     };
   }
 
-  app.get('/api/bot/v1/telegram/config', (_req: Request, res: Response) => {
-    res.json(getTelegramPublicConfig());
+  app.get('/api/bot/v1/telegram/config', async (_req: Request, res: Response) => {
+    res.json(await getTelegramPublicConfig(true));
   });
 
-  app.get('/api/bot/v1/status', (req: Request, res: Response) => {
-    if (!isBotAuthorized(req)) {
+  app.post('/api/bot/v1/telegram/polling', async (req: Request, res: Response) => {
+    if (!(await isBotOrFirebaseAuthorized(req))) {
+      res.status(401).json({ ok: false, error: 'Inicia sesión en la app o envía BOT_API_SECRET.' });
+      return;
+    }
+
+    const botToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+    if (!botToken) {
+      res.status(400).json({
+        ok: false,
+        error: 'Falta configurar TELEGRAM_BOT_TOKEN en Settings → Secrets del proyecto.',
+      });
+      return;
+    }
+
+    const action = req.body?.action === 'stop' ? 'stop' : 'start';
+    if (action === 'stop') {
+      stopTelegramPolling('paused_by_user');
+      const refreshed = await getTelegramPublicConfig(true);
+      res.json({
+        ok: true,
+        message: 'Bot del servidor pausado. Ya puedes ejecutar tu propio script Python con getUpdates sin conflictos.',
+        telegram: refreshed,
+      });
+      return;
+    }
+
+    // Ensure any stale webhook is removed before polling
+    await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ drop_pending_updates: false }),
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => undefined);
+
+    telegramPollingWanted = true;
+    telegramProcessedFirstBatch = true;
+    void runTelegramPollingLoop();
+    await new Promise((r) => setTimeout(r, 350));
+    const refreshed = await getTelegramPublicConfig(true);
+    res.json({
+      ok: true,
+      message: `Bot @${refreshed.botUsername || 'Telegram'} escuchando mensajes en vivo (Polling activo).`,
+      telegram: refreshed,
+    });
+  });
+
+  app.post('/api/bot/v1/telegram/connect-webhook', async (req: Request, res: Response) => {
+    if (!(await isBotOrFirebaseAuthorized(req))) {
+      res.status(401).json({ ok: false, error: 'Inicia sesión en la app o envía BOT_API_SECRET para activar el webhook.' });
+      return;
+    }
+
+    const botToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+    if (!botToken) {
+      res.status(400).json({
+        ok: false,
+        error:
+          'Aún falta configurar TELEGRAM_BOT_TOKEN en Settings → Secrets del proyecto. Agrégalo ahí (sin comillas) y vuelve a presionar Conectar.',
+      });
+      return;
+    }
+
+    const bodyOrigin = typeof req.body?.origin === 'string' ? req.body.origin.trim().replace(/\/$/, '') : '';
+    const envOrigin = (process.env.APP_URL || '').trim().replace(/\/$/, '');
+    const hostHeader = req.get('host') || '';
+    const protoHeader = (req.get('x-forwarded-proto') || req.protocol || 'https').split(',')[0].trim();
+    const inferredOrigin = hostHeader ? `${protoHeader}://${hostHeader}` : '';
+
+    const candidateOrigin =
+      (bodyOrigin.startsWith('https://') ? bodyOrigin : '') ||
+      (envOrigin.startsWith('https://') ? envOrigin : '') ||
+      (inferredOrigin.startsWith('https://') ? inferredOrigin : '') ||
+      bodyOrigin ||
+      envOrigin ||
+      inferredOrigin;
+
+    if (!candidateOrigin.startsWith('https://')) {
+      res.status(400).json({
+        ok: false,
+        error:
+          'Telegram exige una URL pública con HTTPS para Webhooks (no acepta localhost). Usa el botón "Bot en Vivo (Polling)" o abre la URL pública.',
+      });
+      return;
+    }
+
+    if (candidateOrigin.includes('ais-dev-')) {
+      res.status(400).json({
+        ok: false,
+        error:
+          'La URL de vista previa (ais-dev) requiere inicio de sesión de Google y responde 302 a Telegram. Usa el botón "Activar Bot en Vivo (Modo Polling)" para que funcione al instante sin 302.',
+      });
+      return;
+    }
+
+    const webhookUrl = `${candidateOrigin}/api/telegram/webhook`;
+    stopTelegramPolling('webhook_mode');
+
+    try {
+      const setWhResp = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: webhookUrl,
+          allowed_updates: ['message'],
+          drop_pending_updates: false,
+        }),
+        signal: AbortSignal.timeout(7000),
+      });
+      const setWhJson = (await setWhResp.json()) as { ok?: boolean; description?: string };
+
+      if (!setWhResp.ok || !setWhJson.ok) {
+        res.status(400).json({
+          ok: false,
+          error: `Telegram rechazó el webhook: ${setWhJson.description || 'Token inválido o URL inaccesible'}`,
+        });
+        return;
+      }
+
+      await registerTelegramMenuCommands(botToken);
+
+      const refreshed = await getTelegramPublicConfig(true);
+      res.json({
+        ok: true,
+        message: `Bot @${refreshed.botUsername || 'Telegram'} conectado vía Webhook correctamente.`,
+        telegram: refreshed,
+      });
+    } catch {
+      res.status(502).json({
+        ok: false,
+        error: 'No se pudo contactar a api.telegram.org en este momento. Verifica el token e intenta de nuevo.',
+      });
+    }
+  });
+
+  app.get('/api/bot/v1/status', async (req: Request, res: Response) => {
+    if (!(await isBotOrFirebaseAuthorized(req))) {
       res.status(401).json({ error: 'Token Bearer inválido para el servidor del bot.' });
       return;
     }
     const extraPort = Number(process.env.BOT_GATEWAY_PORT);
+    const telegram = await getTelegramPublicConfig(false);
     res.json({
       online: true,
       service: 'Smart Invest Trading Bot Gateway',
@@ -1429,13 +2024,13 @@ async function createServer() {
       maxPortfolioVar99Pct: 2.5,
       supportedSymbols: Object.keys(YAHOO_SYMBOL_MAP),
       requiresBearerToken: Boolean((process.env.BOT_API_SECRET || '').trim()),
-      telegram: getTelegramPublicConfig(),
+      telegram,
       timestampIso: new Date().toISOString(),
     });
   });
 
   app.get('/api/bot/v1/market', async (req: Request, res: Response) => {
-    if (!isBotAuthorized(req)) {
+    if (!(await isBotOrFirebaseAuthorized(req))) {
       res.status(401).json({ error: 'Token Bearer inválido.' });
       return;
     }
@@ -1453,8 +2048,8 @@ async function createServer() {
     res.json(snapshot);
   });
 
-  app.post('/api/bot/v1/classify-user', (req: Request, res: Response) => {
-    if (!isBotAuthorized(req)) {
+  app.post('/api/bot/v1/classify-user', async (req: Request, res: Response) => {
+    if (!(await isBotOrFirebaseAuthorized(req))) {
       res.status(401).json({ error: 'Token Bearer inválido.' });
       return;
     }
@@ -1487,7 +2082,7 @@ async function createServer() {
   });
 
   app.post('/api/bot/v1/signal', async (req: Request, res: Response) => {
-    if (!isBotAuthorized(req)) {
+    if (!(await isBotOrFirebaseAuthorized(req))) {
       res.status(401).json({ error: 'Token Bearer inválido.' });
       return;
     }
@@ -1544,82 +2139,18 @@ async function createServer() {
     const chatId = message?.chat?.id;
     const username = message?.from?.username || message?.from?.first_name || 'Inversionista';
     const text = String(message?.text || '').trim();
+    const dryRun = Boolean(req.body?.dryRun);
 
     if (!chatId || !text) {
       res.json({ ok: true, ignored: true });
       return;
     }
 
-    let replyText = '';
-    const cmd = text.split(/\s+/)[0].toLowerCase();
-
-    if (cmd === '/start') {
-      replyText =
-        `Hola ${username}, bienvenido al bot cuantitativo de Smart Invest.\n\n` +
-        `Comandos disponibles:\n` +
-        `• /clasificar 3,3,4,3,3,4,3,4 — Clasifica tu perfil (8 respuestas de 1 a 4) para conectar a tu servidor\n` +
-        `• /mercado NVDA — Precio real de Yahoo Finance en MXN/USD\n` +
-        `• /avanzado — Requisitos y rutas para conectar tu bot en Python\n` +
-        `• /servidor — Estado del servidor y WebSocket /ws/trading-bot`;
-    } else if (cmd === '/clasificar') {
-      const nums = text
-        .replace('/clasificar', '')
-        .split(/[\s,;]+/)
-        .map(Number)
-        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 4);
-
-      if (nums.length !== 8) {
-        replyText =
-          'Para clasificarte envía exactamente 8 números del 1 al 4 separados por coma.\n' +
-          'Ejemplo para perfil avanzado: /clasificar 3,3,4,3,3,4,3,4\n' +
-          'Ejemplo principiante: /clasificar 1,1,2,1,2,1,1,2';
-      } else {
-        const result = classifyNewUserServerSide(nums, { telegramUsername: username });
-        replyText =
-          `Clasificación completada para @${username}:\n` +
-          `• Perfil definitivo: ${result.definitiveProfile.toUpperCase()} (${result.totalScore}/32 pts)\n` +
-          `• Nivel de experiencia: ${result.experienceTier.toUpperCase()}\n` +
-          `• Acceso a Bot Avanzado: ${result.eligibleForAdvancedBot ? 'AUTORIZADO' : 'RESTRINGIDO (usa Modo Juego en web primero)'}\n` +
-          `• Ruta recomendada: ${result.serverAccess.recommendedChannel}\n` +
-          (result.eligibleForAdvancedBot
-            ? `• WebSocket Python: /ws/trading-bot | REST: /api/bot/v1/market`
-            : `• Te recomendamos practicar primero en Modo Juego ($10,000 USD/día) en la app web.`);
-      }
-    } else if (cmd === '/mercado') {
-      const sym = (text.split(/\s+/)[1] || 'SPY').toUpperCase();
-      const snapshot = await buildLiveQuotesSnapshot();
-      const q = snapshot.quotes[sym];
-      replyText = q
-        ? `${q.symbol} (${q.yahooTicker})\n• Precio: $${q.priceMxn.toLocaleString('es-MX')} MXN ($${q.priceOriginal} ${q.originalCurrency})\n• Cambio día: ${q.changePct >= 0 ? '+' : ''}${q.changePct}%\n• Volatilidad anual: ${q.volatilityAnnualPct}%`
-        : `Símbolo ${sym} no encontrado. Prueba con: SPY, AAPL, NVDA, MSFT, AMZN, LLY, XOM, WALMEX, GFNORTE, XRP_USDT.`;
-    } else if (cmd === '/avanzado' || cmd === '/servidor') {
-      const appUrl = (process.env.APP_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-      const wsUrl = appUrl.replace(/^http/, 'ws') + '/ws/trading-bot';
-      replyText =
-        `Smart Invest · Servidor para Usuarios Avanzados (Bot Python)\n` +
-        `• REST API: ${appUrl}/api/bot/v1/market\n` +
-        `• Clasificador: ${appUrl}/api/bot/v1/classify-user\n` +
-        `• WebSocket Live: ${wsUrl}\n` +
-        `• Comisión: 0.10% | Tope VaR 99%: 2.50%`;
-    } else {
-      replyText = 'Comando no reconocido. Usa /start, /clasificar, /mercado NVDA o /avanzado.';
-    }
-
+    const replyText = await buildTelegramReplyText(username, text);
     const botToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
-    if (botToken) {
-      try {
-        await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text: replyText }),
-          signal: AbortSignal.timeout(6000),
-        });
-      } catch (err) {
-        console.error('Telegram sendMessage failed:', err);
-      }
-    }
+    const telegramDelivered = botToken && !dryRun ? await sendTelegramReply(botToken, chatId, replyText) : false;
 
-    res.json({ ok: true, replyText, telegramDelivered: Boolean(botToken) });
+    res.json({ ok: true, replyText, telegramDelivered });
   });
 
   // WebSocket Stream for Python Trading Bots (/ws/trading-bot)
@@ -1779,6 +2310,7 @@ async function createServer() {
 
   const shutdown = async () => {
     try {
+      stopTelegramPolling('inactive');
       wss.close();
       botWss.close();
       if (viteServer) await viteServer.close();

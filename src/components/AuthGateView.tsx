@@ -21,6 +21,7 @@ import {
   signInWithEmailPassword,
   signInWithGooglePopup,
 } from '../firebase';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 interface AuthGateViewProps {
   darkMode: boolean;
@@ -29,8 +30,7 @@ interface AuthGateViewProps {
 
 type AuthMode = 'login' | 'register' | 'reset';
 
-const FIREBASE_PROVIDERS_URL =
-  'https://console.firebase.google.com/project/silicon-brace-508017-h2/authentication/providers';
+const FIREBASE_PROVIDERS_URL = `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/providers`;
 
 interface MappedAuthError {
   message: string;
@@ -310,10 +310,15 @@ export const AuthGateView: React.FC<AuthGateViewProps> = ({ darkMode, onToggleDa
                 </div>
 
                 {emailProviderDisabled && (
-                  <div className="pl-6 space-y-2 pt-1 border-t border-rose-200/70 dark:border-rose-800/60">
+                  <div className="pl-6 space-y-2.5 pt-1.5 border-t border-rose-200/70 dark:border-rose-800/60">
                     <p className="text-[11px] text-rose-700 dark:text-rose-300 leading-relaxed">
-                      Mientras tanto, <strong>Continuar con Google</strong> ya está activo y crea un perfil único por correo. Si eres administrador del proyecto, actívalo en 15 segundos:
+                      Por defecto el entorno solo activa Google Login. Para activar <strong>Correo y contraseña</strong> (toma 15 segundos):
                     </p>
+                    <ol className="list-decimal pl-4 space-y-0.5 text-[11px] text-rose-800 dark:text-rose-200">
+                      <li>Haz clic en <strong>Abrir Firebase Console</strong> abajo.</li>
+                      <li>Entra a <strong>Authentication → Sign-in method → Agregar proveedor nuevo</strong>.</li>
+                      <li>Elige <strong>Correo electrónico/contraseña</strong>, activa <strong>Habilitar</strong> y guarda.</li>
+                    </ol>
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
@@ -321,7 +326,7 @@ export const AuthGateView: React.FC<AuthGateViewProps> = ({ darkMode, onToggleDa
                         disabled={busy}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold transition-colors cursor-pointer disabled:opacity-50"
                       >
-                        Entrar ahora con Google
+                        Entrar ahora con Google (ya activo)
                       </button>
                       <a
                         href={FIREBASE_PROVIDERS_URL}

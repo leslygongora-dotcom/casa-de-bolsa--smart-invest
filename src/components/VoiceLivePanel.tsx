@@ -57,8 +57,12 @@ export const VoiceLivePanel: React.FC = () => {
   const streamRef = useRef<MediaStream | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const isLiveReadyRef = useRef<boolean>(false);
+  const turnOpenRef = useRef<{ user: boolean; model: boolean }>({ user: false, model: false });
 
-  const stopAll = () => {
+  const stopAll = (preserveErrorState = false) => {
+    isLiveReadyRef.current = false;
+    turnOpenRef.current = { user: false, model: false };
     try {
       processorRef.current?.disconnect();
     } catch {
@@ -91,19 +95,25 @@ export const VoiceLivePanel: React.FC = () => {
     outputCtxRef.current?.close().catch(() => {});
     outputCtxRef.current = null;
 
-    updateStatus('idle');
-    setStatusMessage('Sesión de voz finalizada. Puedes iniciarla de nuevo cuando quieras.');
+    if (!preserveErrorState) {
+      updateStatus('idle');
+      setStatusMessage('Sesión de voz finalizada. Puedes iniciarla de nuevo cuando quieras.');
+    }
   };
 
   useEffect(() => {
     return () => {
-      stopAll();
+      stopAll(true);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const schedulePlayback = (base64Pcm: string) => {
     const outCtx = outputCtxRef.current;
     if (!outCtx) return;
+    if (outCtx.state === 'suspended') {
+      void outCtx.resume().catch(() => {});
+    }
     const floatData = base64PcmToFloat32(base64Pcm);
     const buffer = outCtx.createBuffer(1, floatData.length, 24000);
     buffer.getChannelData(0).set(floatData);
@@ -135,6 +145,30 @@ export const VoiceLivePanel: React.FC = () => {
     nextStartTimeRef.current = 0;
   };
 
+  const appendTranscriptChunk = (speaker: 'Tú' | 'Asesor de Voz', chunk: string) => {
+    const isUser = speaker === 'Tú';
+    const isTurnOpen = isUser ? turnOpenRef.current.user : turnOpenRef.current.model;
+    if (isUser) {
+      turnOpenRef.current.user = true;
+      turnOpenRef.current.model = false;
+    } else {
+      turnOpenRef.current.model = true;
+      turnOpenRef.current.user = false;
+    }
+
+    setTranscripts((prev) => {
+      if (isTurnOpen && prev.length > 0 && prev[prev.length - 1].speaker === speaker) {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          ...updated[updated.length - 1],
+          text: updated[updated.length - 1].text + chunk,
+        };
+        return updated;
+      }
+      return [...prev, { id: `${isUser ? 'u' : 'a'}-${Date.now()}-${prev.length}`, speaker, text: chunk }];
+    });
+  };
+
   const startLiveVoice = async () => {
     if (status === 'connecting' || status === 'live') {
       stopAll();
@@ -150,6 +184,8 @@ export const VoiceLivePanel: React.FC = () => {
 
       const inputCtx = new AudioContext({ sampleRate: 16000 });
       const outputCtx = new AudioContext({ sampleRate: 24000 });
+      if (inputCtx.state === 'suspended') await inputCtx.resume();
+      if (outputCtx.state === 'suspended') await outputCtx.resume();
       inputCtxRef.current = inputCtx;
       outputCtxRef.current = outputCtx;
 
@@ -163,7 +199,7 @@ export const VoiceLivePanel: React.FC = () => {
         processorRef.current = processor;
 
         processor.onaudioprocess = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
+          if (ws.readyState !== WebSocket.OPEN || !isLiveReadyRef.current) return;
           const samples = e.inputBuffer.getChannelData(0);
           const base64 = floatTo16BitPcmBase64(samples);
           ws.send(JSON.stringify({ audio: base64 }));
@@ -177,31 +213,31 @@ export const VoiceLivePanel: React.FC = () => {
         try {
           const msg = JSON.parse(event.data);
           if (msg.ready) {
+            isLiveReadyRef.current = true;
             updateStatus('live');
             setStatusMessage('Escuchando en vivo: habla normalmente y el asesor te responderá por voz.');
           }
           if (msg.error) {
-            stopAll();
             updateStatus('error');
             setStatusMessage(msg.error);
+            stopAll(true);
           }
           if (msg.audio) {
             schedulePlayback(msg.audio);
           }
           if (msg.interrupted) {
             clearAudioQueue();
+            turnOpenRef.current.model = false;
+          }
+          if (msg.turnComplete) {
+            turnOpenRef.current.model = false;
+            turnOpenRef.current.user = false;
           }
           if (msg.inputTranscript) {
-            setTranscripts((prev) => [
-              ...prev,
-              { id: `u-${Date.now()}`, speaker: 'Tú', text: msg.inputTranscript },
-            ]);
+            appendTranscriptChunk('Tú', String(msg.inputTranscript));
           }
           if (msg.outputTranscript) {
-            setTranscripts((prev) => [
-              ...prev,
-              { id: `a-${Date.now()}`, speaker: 'Asesor de Voz', text: msg.outputTranscript },
-            ]);
+            appendTranscriptChunk('Asesor de Voz', String(msg.outputTranscript));
           }
         } catch {
           // ignore malformed messages
@@ -211,19 +247,24 @@ export const VoiceLivePanel: React.FC = () => {
       ws.onerror = () => {
         updateStatus('error');
         setStatusMessage('No se pudo conectar la sesión de audio en vivo.');
+        stopAll(true);
       };
 
       ws.onclose = () => {
         if (statusRef.current === 'live') {
           stopAll();
+        } else if (statusRef.current === 'connecting') {
+          updateStatus('error');
+          setStatusMessage('La conexión de voz en vivo se cerró antes de completarse.');
+          stopAll(true);
         }
       };
     } catch {
-      stopAll();
       updateStatus('error');
       setStatusMessage(
         'No fue posible acceder al micrófono. Verifica los permisos de audio en tu navegador.'
       );
+      stopAll(true);
     }
   };
 

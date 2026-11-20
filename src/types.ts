@@ -91,6 +91,23 @@ export interface TradeOrder {
   traditionalCommissionMxn: number;
   timestamp: string;
   executedAtIso?: string;
+  entryPriceMxn?: number;
+  costBasisMxn?: number;
+  netProceedsMxn?: number;
+  realizedPnlMxn?: number;
+  realizedPnlPct?: number;
+}
+
+export interface EquityTimelinePoint {
+  timestampIso: string;
+  equityMxn: number;
+  eventLabel?: string;
+}
+
+export interface WeeklyTransferState {
+  lastTransferIso: string | null;
+  transfersCount: number;
+  totalTransferredMxn: number;
 }
 
 export interface NewsItem {

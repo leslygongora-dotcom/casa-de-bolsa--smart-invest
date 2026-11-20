@@ -867,6 +867,18 @@ export const MarketView: React.FC<MarketViewProps> = ({
                         {ord.side === 'BUY' ? 'COMPRA' : 'VENTA'}
                       </span>{' '}
                       <span className="font-mono font-bold">{ord.shares} {ord.symbol}</span> @ ${ord.priceMxn.toFixed(2)}
+                      {ord.side === 'SELL' && ord.realizedPnlPct !== undefined && (
+                        <span
+                          className={`ml-2 font-mono font-bold ${
+                            ord.realizedPnlPct >= 0
+                              ? 'text-emerald-600 dark:text-emerald-400'
+                              : 'text-rose-600 dark:text-rose-400'
+                          }`}
+                        >
+                          ({ord.realizedPnlPct >= 0 ? '+' : ''}
+                          {ord.realizedPnlPct.toFixed(2)}%)
+                        </span>
+                      )}
                     </div>
                     <div className="text-right font-mono tabular-nums text-slate-500 dark:text-slate-400">
                       Comisión: ${ord.commissionMxn.toFixed(2)} · {ord.timestamp}

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Activity,
   ArrowDownRight,
+  ArrowRightLeft,
   ArrowUpRight,
   Bell,
   CheckCircle2,
@@ -17,8 +18,21 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { MobileAlarm, NewsItem, PortfolioPosition, Sector, StockAsset, TabId } from '../types';
+import {
+  EquityTimelinePoint,
+  MobileAlarm,
+  NewsItem,
+  OptionPosition,
+  PortfolioPosition,
+  Sector,
+  StockAsset,
+  TabId,
+  TradeOrder,
+  WeeklyTransferState,
+} from '../types';
 import { computePortfolioRiskReturn } from '../utils/portfolioMetrics';
+import { computeOpenStockPnl } from '../utils/tradeMetrics';
+import { OperationsLedgerPanel } from './OperationsLedgerPanel';
 import { PortfolioRechartsWidget } from './PortfolioRechartsWidget';
 
 interface DashboardViewProps {
@@ -29,8 +43,17 @@ interface DashboardViewProps {
   portfolioVarPct: number;
   totalCommissionSavedMxn: number;
   positions: PortfolioPosition[];
+  optionPositions: OptionPosition[];
+  orders: TradeOrder[];
   stockMap: Record<string, StockAsset>;
   equityHistory: number[];
+  portfolioCreatedAtIso: string;
+  equityTimeline: EquityTimelinePoint[];
+  weeklyTransfer: WeeklyTransferState;
+  canTransferWeekly10k: boolean;
+  nextWeeklyTransferAtIso: string | null;
+  daysUntilNextWeeklyTransfer: number;
+  onTransferWeekly10k: () => void;
   news: NewsItem[];
   alarms: MobileAlarm[];
   favoriteSectors: { sector: Sector; score: number }[];
@@ -45,6 +68,7 @@ interface DashboardViewProps {
   onNavigate: (tab: TabId) => void;
   onInspectStock: (symbol: string) => void;
   onQuickSell: (symbol: string, shares: number) => void;
+  onCloseOptionPosition: (positionId: string) => { ok: boolean; message: string };
   onOpenTooltip: (key: string) => void;
   onSimulateShock: (mode: 'drop' | 'rally' | 'dip_in_profit' | 'buy') => void;
   investorProfilePanel?: React.ReactNode;
@@ -58,8 +82,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   portfolioVarPct,
   totalCommissionSavedMxn,
   positions,
+  optionPositions,
+  orders,
   stockMap,
   equityHistory,
+  portfolioCreatedAtIso,
+  equityTimeline,
+  weeklyTransfer,
+  canTransferWeekly10k,
+  nextWeeklyTransferAtIso,
+  daysUntilNextWeeklyTransfer,
+  onTransferWeekly10k,
   news,
   alarms,
   favoriteSectors,
@@ -74,6 +107,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigate,
   onInspectStock,
   onQuickSell,
+  onCloseOptionPosition,
   onOpenTooltip,
   onSimulateShock,
   investorProfilePanel,
@@ -159,6 +193,27 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="flex flex-wrap items-center gap-3 shrink-0">
           <button
             type="button"
+            onClick={onTransferWeekly10k}
+            className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
+              canTransferWeekly10k
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500 shadow-sm'
+                : 'bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+            }`}
+            title={
+              canTransferWeekly10k
+                ? 'Transfiere $10,000.00 MXN esta semana a tu portafolio'
+                : `Siguiente transferencia disponible en ${daysUntilNextWeeklyTransfer} ${daysUntilNextWeeklyTransfer === 1 ? 'día' : 'días'}`
+            }
+          >
+            <ArrowRightLeft className="w-4 h-4 shrink-0" />
+            <span>
+              {canTransferWeekly10k
+                ? 'Transferir $10k (Semanal)'
+                : `Transferido · Próxima en ${daysUntilNextWeeklyTransfer}d`}
+            </span>
+          </button>
+          <button
+            type="button"
             onClick={onToggleGameMode}
             className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
               gameModeEnabled
@@ -167,11 +222,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             }`}
           >
             <Gamepad2 className="w-4 h-4 shrink-0" />
-            <span>{gameModeEnabled ? 'Modo Juego: ACTIVO' : 'Activar Modo Juego ($10k USD/día)'}</span>
+            <span>{gameModeEnabled ? 'Modo Juego: ACTIVO' : 'Modo Juego ($10k USD/día)'}</span>
           </button>
           <button
             onClick={() => onNavigate('market')}
-            className="px-5 py-2.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-5 py-2.5 rounded-md bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             Comprar o Vender Activos
           </button>
@@ -185,7 +240,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Barra Visible de Modo Juego ($10,000 USD diarios) */}
+      {/* Barra Visible de Fondeo Semanal ($10k MXN) y Modo Juego ($10,000 USD diarios) */}
       <div
         className={`p-4 sm:p-5 rounded-lg border flex flex-col md:flex-row md:items-center justify-between gap-4 ${
           gameModeEnabled
@@ -198,26 +253,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 border ${
               gameModeEnabled
                 ? 'bg-amber-500/20 border-amber-400 text-amber-700 dark:text-amber-300'
-                : 'bg-slate-100 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
             }`}
           >
-            <Gamepad2 className="w-5 h-5" />
+            {gameModeEnabled ? <Gamepad2 className="w-5 h-5" /> : <ArrowRightLeft className="w-5 h-5" />}
           </div>
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                 {gameModeEnabled
                   ? 'Modo Juego Activo · Bono diario de $10,000 USD'
-                  : 'Tu portafolio nuevo inicia en $0.00 MXN'}
+                  : 'Portafolio en $0.00 iniciales · Transferencia Semanal de $10,000 MXN'}
               </h3>
               <span
                 className={`px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wide ${
                   gameModeEnabled
                     ? 'bg-amber-500 text-slate-950'
+                    : canTransferWeekly10k
+                    ? 'bg-emerald-600 text-white'
                     : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
                 }`}
               >
-                {gameModeEnabled ? 'Simulación con USD diarios' : 'Cuenta Inicial $0'}
+                {gameModeEnabled
+                  ? 'Simulación con USD diarios'
+                  : canTransferWeekly10k
+                  ? 'Transferencia $10k disponible'
+                  : `Disponible en ${daysUntilNextWeeklyTransfer}d`}
               </span>
             </div>
             <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">
@@ -235,12 +296,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </>
               ) : (
                 <>
-                  Activa el <strong>Modo Juego</strong> para recibir automáticamente{' '}
-                  <strong>$10,000 USD cada día</strong> (≈{' '}
-                  <span className="font-mono tabular-nums">
-                    ${dailyGrantMxn.toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN
-                  </span>
-                  ) y practicar comprando acciones y opciones sin afectar tu saldo inicial de $0.
+                  Todo portafolio inicia en <strong>$0.00 MXN</strong>. Puedes{' '}
+                  <strong>transferir $10,000 MXN cada semana</strong> (llevas{' '}
+                  <strong className="font-mono tabular-nums">
+                    {weeklyTransfer.transfersCount}
+                  </strong>{' '}
+                  {weeklyTransfer.transfersCount === 1 ? 'transferencia' : 'transferencias'} ·{' '}
+                  <strong className="font-mono tabular-nums">
+                    ${weeklyTransfer.totalTransferredMxn.toLocaleString('es-MX')} MXN
+                  </strong>
+                  )
+                  {nextWeeklyTransferAtIso && !canTransferWeekly10k
+                    ? ` · Siguiente el ${new Date(nextWeeklyTransferAtIso).toLocaleDateString('es-MX', {
+                        day: '2-digit',
+                        month: 'short',
+                      })}.`
+                    : '.'}
                 </>
               )}
             </p>
@@ -248,6 +319,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          {!gameModeEnabled && (
+            <button
+              type="button"
+              onClick={onTransferWeekly10k}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
+                canTransferWeekly10k
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              <ArrowRightLeft className="w-4 h-4" />
+              <span>
+                {canTransferWeekly10k
+                  ? 'Transferir +$10,000 MXN'
+                  : `Próxima en ${daysUntilNextWeeklyTransfer}d`}
+              </span>
+            </button>
+          )}
           {gameModeEnabled && (
             <button
               type="button"
@@ -375,10 +464,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 Saldo inicial $0.00 ·{' '}
                 <button
                   type="button"
+                  onClick={onTransferWeekly10k}
+                  className="font-bold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                >
+                  Transferir $10k
+                </button>{' '}
+                o{' '}
+                <button
+                  type="button"
                   onClick={onToggleGameMode}
                   className="font-bold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
                 >
-                  Activar Modo Juego
+                  Modo Juego
                 </button>
               </>
             )}
@@ -429,11 +526,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* WIDGET RECHARTS: Historial interactivo */}
+      {/* WIDGET RECHARTS: Historial real desde creación del portafolio */}
       <PortfolioRechartsWidget
         currentPortfolioMxn={totalPortfolioMxn}
         equityHistory={equityHistory}
+        portfolioCreatedAtIso={portfolioCreatedAtIso}
+        equityTimeline={equityTimeline}
         onOpenTooltip={onOpenTooltip}
+      />
+
+      {/* APARTADO ABAJO DE LA GRÁFICA DEL PORTAFOLIO: Operaciones Abiertas y Cerradas con Rentabilidad */}
+      <OperationsLedgerPanel
+        positions={positions}
+        optionPositions={optionPositions}
+        orders={orders}
+        stockMap={stockMap}
+        onQuickSellStock={onQuickSell}
+        onCloseOptionPosition={onCloseOptionPosition}
+        onInspectStock={onInspectStock}
+        onNavigateMarket={() => onNavigate('market')}
+        onNavigateOptions={() => onNavigate('options')}
       />
 
       {/* TARJETA DE RESUMEN CUANTITATIVO: Ratio de Sharpe y Máximo Drawdown */}
@@ -911,8 +1023,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
                 {positions.map((pos) => {
                   const current = stockMap[pos.symbol]?.priceMxn ?? pos.avgEntryMxn;
-                  const pnlMxn = (current - pos.avgEntryMxn) * pos.shares;
-                  const pnlPct = ((current - pos.avgEntryMxn) / pos.avgEntryMxn) * 100;
+                  const openMetrics = computeOpenStockPnl(pos, current);
+                  const pnlMxn = openMetrics.netPnlMxn;
+                  const pnlPct = openMetrics.pnlPct;
                   const shouldSell = current <= pos.stopLossMxn || current >= pos.takeProfitMxn;
 
                   return (

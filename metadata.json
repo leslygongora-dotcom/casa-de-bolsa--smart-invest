@@ -1,7 +1,7 @@
 {
   "name": "Smart Invest | Casa de Bolsa Cuantitativa LESLY GONGORA ",
   "description": "Casa de bolsa en tiempo real con bajas comisiones, protección VaR 99%, noticias financieras inteligentes, análisis por sectores y alarmas móviles de venta o retención.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

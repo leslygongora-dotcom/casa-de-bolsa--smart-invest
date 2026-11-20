@@ -1,6 +1,7 @@
 import {
   DeepAnalysisResult,
   EmailMessage,
+  EquityTimelinePoint,
   InvestorProfile,
   MobileAlarm,
   OptionPosition,
@@ -8,6 +9,7 @@ import {
   Sector,
   StockAsset,
   TradeOrder,
+  WeeklyTransferState,
 } from '../types';
 
 export function getPortfolioStorageKey(uid: string): string {
@@ -26,6 +28,9 @@ export interface PortfolioSnapshotBucket {
   optionPositions: OptionPosition[];
   orders: TradeOrder[];
   equityHistory: number[];
+  portfolioCreatedAtIso?: string;
+  equityTimeline?: EquityTimelinePoint[];
+  weeklyTransfer?: WeeklyTransferState;
 }
 
 export interface GameModeState {
@@ -41,11 +46,14 @@ export interface PersistedPortfolioState {
   version: 3;
   uid: string;
   savedAtIso: string;
+  portfolioCreatedAtIso?: string;
   cashMxn: number;
   positions: PortfolioPosition[];
   optionPositions?: OptionPosition[];
   orders: TradeOrder[];
   equityHistory: number[];
+  equityTimeline?: EquityTimelinePoint[];
+  weeklyTransfer?: WeeklyTransferState;
   stocks: StockAsset[];
   viewCounts: Record<string, number>;
   sectorScores: Record<Sector, number>;
